@@ -41,7 +41,7 @@ Universal Converter distinguishes between three tiers of format support:
 2. **Available**: An installed local or host engine (`ffmpeg`, `magick`, `pandoc`, or `typst`) has been dynamically probed and reports read/write support for the container and its underlying codecs.
 3. **Verified**: The conversion route has passed end-to-end integration and automated test suite verification against real binary media.
 
-### Verified Native Formats (114 Native Formats Audited)
+### Verified Native Formats (114 Unique Formats Audited)
 
 | Engine | Category | Verified Count | Formats |
 | :--- | :--- | :---: | :--- |
