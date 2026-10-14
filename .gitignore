@@ -1,0 +1,32 @@
+# Build directories
+build/
+build-*/
+dist/
+dist-*/
+
+# CMake generated files
+CMakeUserPresets.json
+.cache/
+
+# Bundled engine binaries (downloaded in CI or locally populated)
+# Do not track large 100MB+ binaries in Git
+engines/pandoc/pandoc
+engines/pandoc/pandoc.exe
+engines/typst/typst
+engines/typst/typst.exe
+*.tar.gz
+*.tar.xz
+*.zip
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Temporary conversion outputs
+.tmp_*
+
+# Internal documentation and planning notes
+docs/

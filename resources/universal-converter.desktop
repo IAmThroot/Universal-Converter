@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Universal Converter
+GenericName=File Converter
+Comment=High-performance offline cross-platform media and document converter
+Exec=UniversalConverter %F
+Icon=universal-converter
+Terminal=false
+Categories=AudioVideo;Graphics;Utility;
+Keywords=Converter;Video;Audio;Image;Document;FFmpeg;Pandoc;ImageMagick;
+StartupNotify=true

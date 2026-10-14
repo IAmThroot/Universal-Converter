@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/">
+        <file>vert_dark.qss</file>
+        <file>app_icon.png</file>
+    </qresource>
+</RCC>
