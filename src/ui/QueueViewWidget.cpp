@@ -63,7 +63,7 @@ void QueueViewWidget::setupUi() {
     layout->addWidget(m_treeWidget, 1);
 
     auto* bottomLayout = new QHBoxLayout();
-    m_summaryLabel = new QLabel("0 items queued", this);
+    m_summaryLabel = new QLabel("Queue is empty", this);
     m_summaryLabel->setStyleSheet("color: #64748b; font-size: 12px;");
 
     m_cancelBtn = new QPushButton("Cancel Selected", this);
@@ -116,9 +116,20 @@ void QueueViewWidget::refreshQueue() {
         }
     }
 
-    m_summaryLabel->setText(QString("%1 job(s) in queue (%2 active)")
-                                .arg(jobs.size())
-                                .arg(m_orchestrator->activeJobCount()));
+    if (jobs.isEmpty()) {
+        m_summaryLabel->setText("Queue is empty");
+    } else {
+        const int active = m_orchestrator->activeJobCount();
+        const int queued = m_orchestrator->queuedJobs().size();
+        if (active > 0 || queued > 0) {
+            m_summaryLabel->setText(QString("%1 job(s) in queue (%2 active, %3 waiting)")
+                                        .arg(jobs.size())
+                                        .arg(active)
+                                        .arg(queued));
+        } else {
+            m_summaryLabel->setText(QString("All %1 job(s) completed").arg(jobs.size()));
+        }
+    }
 }
 
 void QueueViewWidget::onJobAdded(const QString& /*jobId*/) {

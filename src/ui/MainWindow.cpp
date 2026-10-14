@@ -47,6 +47,30 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&app::ToolchainManager::instance(), &app::ToolchainManager::toolchainStatusChanged,
             this, &MainWindow::updateToolchainStatus);
 
+    auto updateQueueStatus = [this]() {
+        const int active = m_orchestrator->activeJobCount();
+        const int queued = m_orchestrator->queuedJobs().size();
+        const int total = m_orchestrator->totalJobCount();
+
+        if (active > 0 || queued > 0) {
+            m_statusLabel->setText(QString("Converting %1 item(s) (%2 queued)").arg(active).arg(queued));
+        } else if (total > 0) {
+            m_statusLabel->setText(QString("All %1 job(s) completed").arg(total));
+        } else {
+            m_statusLabel->setText("Ready");
+        }
+    };
+
+    connect(m_orchestrator.get(), &core::ConversionOrchestrator::jobAdded, this, updateQueueStatus);
+    connect(m_orchestrator.get(), &core::ConversionOrchestrator::jobStarted, this, updateQueueStatus);
+    connect(m_orchestrator.get(), &core::ConversionOrchestrator::jobFinished, this, [updateQueueStatus](const QString&, core::JobState) {
+        updateQueueStatus();
+    });
+    connect(m_orchestrator.get(), &core::ConversionOrchestrator::jobRemoved, this, [updateQueueStatus](const QString&) {
+        updateQueueStatus();
+    });
+    connect(m_orchestrator.get(), &core::ConversionOrchestrator::queueDrained, this, updateQueueStatus);
+
     updateToolchainStatus();
 }
 
@@ -248,8 +272,6 @@ void MainWindow::onFilesDropped(const QStringList& filePaths) {
 
         m_orchestrator->addJob(job);
     }
-
-    m_statusLabel->setText(QString("Queue contains %1 job(s)").arg(m_orchestrator->totalJobCount()));
 }
 
 void MainWindow::onBrowseFilesClicked() {
