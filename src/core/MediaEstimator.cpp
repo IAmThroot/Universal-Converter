@@ -74,14 +74,16 @@ EstimationResult MediaEstimator::estimateMediaOutput(const MediaEstimationInput&
         int srcH = input.sourceHeight > 0 ? input.sourceHeight : 1080;
         int dstW = input.targetWidth > 0 ? input.targetWidth : srcW;
         int dstH = input.targetHeight > 0 ? input.targetHeight : srcH;
+        const int quality = qBound(1, input.targetQuality, 100);
 
-        double scaleFactor = (static_cast<double>(dstW * dstH)) / (static_cast<double>(srcW * srcH));
+        const double scaleFactor = (static_cast<double>(dstW) * static_cast<double>(dstH)) /
+                                   (static_cast<double>(srcW) * static_cast<double>(srcH));
         double formatRatio = 1.0;
 
         if (tgt == "webp" || tgt == "avif") {
-            formatRatio = 0.55 * (input.targetQuality / 85.0);
+            formatRatio = 0.55 * (quality / 85.0);
         } else if (tgt == "jpg" || tgt == "jpeg") {
-            formatRatio = 0.75 * (input.targetQuality / 85.0);
+            formatRatio = 0.75 * (quality / 85.0);
         } else if (tgt == "png") {
             formatRatio = 1.2;
         }
@@ -91,7 +93,7 @@ EstimationResult MediaEstimator::estimateMediaOutput(const MediaEstimationInput&
         result.estimatedSizeBytes = qMax<qint64>(512, static_cast<qint64>(estBytes));
         result.formattedEstimatedSize = formatBytes(result.estimatedSizeBytes);
         result.explanation = QString("Estimated image size based on quality factor %1% and dimension scaling (%2x%3).")
-                                 .arg(input.targetQuality)
+                                 .arg(quality)
                                  .arg(dstW)
                                  .arg(dstH);
         return result;

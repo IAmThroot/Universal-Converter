@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 project(UniversalConverter
-    VERSION 1.0.0
+    VERSION 1.1.0
     DESCRIPTION "High-performance, standalone, offline cross-platform media and document converter"
     LANGUAGES CXX
 )
@@ -8,6 +8,18 @@ project(UniversalConverter
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Default to an optimized Release build when no build type is given
+# (single-config generators like Ninja/Make). Multi-config generators ignore this.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+    set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "RelWithDebInfo" "MinSizeRel")
+endif()
+
+if(NOT MSVC)
+    # Baseline optimization for non-MSVC when user did not specify flags.
+    add_compile_options($<$<CONFIG:Release>:-O2>)
+endif()
 
 # Enable Qt standard properties
 set(CMAKE_AUTOMOC ON)

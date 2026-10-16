@@ -1,6 +1,7 @@
 #include "PandocEngine.h"
 #include "../app/ToolchainManager.h"
 #include "../core/OutputPathPlanner.h"
+#include "../core/FormatRegistry.h"
 #include <QFileInfo>
 #include <QDir>
 #include <QUuid>
@@ -13,16 +14,32 @@ PandocEngine::PandocEngine(QObject* parent)
 }
 
 bool PandocEngine::canConvert(const QString& inputFormatId, const QString& outputFormatId) const {
-    const auto& caps = PandocCapabilities::instance();
-    if (!caps.isDiscovered()) {
-        const auto& tc = app::ToolchainManager::instance();
-        if (tc.pandoc().isAvailable) {
-            PandocCapabilities::instance().discover(tc.pandoc().executablePath);
+    const auto& registry = core::FormatRegistry::instance();
+    const QString in = registry.normalizeFormatId(inputFormatId);
+    const QString out = registry.normalizeFormatId(outputFormatId);
+    const auto* inDef = registry.findById(in);
+    const auto* outDef = registry.findById(out);
+    if (inDef && outDef) {
+        const auto compat = registry.checkCompatibility(in, out);
+        if (compat.isSupported && compat.responsibleEngine == "Pandoc") {
+            return true;
         }
+        return false;
     }
-
-    if (caps.isDiscovered()) {
-        return caps.canReadFormat(inputFormatId) && caps.canWriteFormat(outputFormatId);
+    if (!inDef || !outDef) {
+        // Unknown to registry: fall back to live capability probing.
+        const auto& caps = PandocCapabilities::instance();
+        if (!caps.isDiscovered()) {
+            const auto& tc = app::ToolchainManager::instance();
+            if (tc.pandoc().isAvailable) {
+                PandocCapabilities::instance().discover(tc.pandoc().executablePath);
+            }
+        }
+        if (caps.isDiscovered()) {
+            return caps.canReadFormat(inputFormatId) && caps.canWriteFormat(outputFormatId);
+        }
+    } else {
+        return false;
     }
 
     // Default basic document formats if undiscovered
@@ -52,7 +69,15 @@ bool PandocEngine::executeJob(std::shared_ptr<core::ConversionJob> job) {
 
     // Prepare temp output path
     const QString finalOut = job->finalOutputPath();
+    if (finalOut.trimmed().isEmpty()) {
+        job->setError("Output path is empty; job was not planned correctly.");
+        return false;
+    }
     const QString tempOut = core::OutputPathPlanner::generateTemporaryOutputPath(finalOut);
+    if (tempOut.isEmpty()) {
+        job->setError("Failed to generate temporary output path.");
+        return false;
+    }
 
     // Build arguments from options
     DocumentConversionOptions options;
@@ -143,12 +168,12 @@ void PandocEngine::onProcessFinished(const QString& jobId, const core::ProcessRe
         return;
     }
 
-    // Publish final file
-    if (QFile::exists(ctx->finalOutputPath)) {
-        QFile::remove(ctx->finalOutputPath);
-    }
-    if (!QFile::rename(ctx->tempOutputPath, ctx->finalOutputPath)) {
-        ctx->job->setError(QString("Failed to move temporary file to final path: %1").arg(ctx->finalOutputPath));
+    // Publish final file (atomic replace)
+    QString publishError;
+    if (!core::OutputPathPlanner::publishTempToFinal(ctx->tempOutputPath, ctx->finalOutputPath, &publishError)) {
+        ctx->job->setError(publishError.isEmpty()
+                               ? QString("Failed to move temporary file to final path: %1").arg(ctx->finalOutputPath)
+                               : publishError);
         emit jobFinished(jobId, false, "Filesystem publish failed");
         return;
     }

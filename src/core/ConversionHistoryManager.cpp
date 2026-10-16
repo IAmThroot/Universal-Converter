@@ -23,9 +23,16 @@ ConversionHistoryManager::~ConversionHistoryManager() {
 }
 
 QString ConversionHistoryManager::historyFilePath() const {
+    static QString s_cached;
+    if (!s_cached.isEmpty()) return s_cached;
     const QString appData = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    QDir().mkpath(appData);
-    return QDir(appData).filePath("conversion_history.json");
+    if (!appData.isEmpty()) {
+        QDir().mkpath(appData);
+        s_cached = QDir(appData).filePath("conversion_history.json");
+    } else {
+        s_cached = QDir::current().filePath("conversion_history.json");
+    }
+    return s_cached;
 }
 
 void ConversionHistoryManager::recordJob(const ConversionJob* job, qint64 durationMs) {
@@ -130,7 +137,9 @@ void ConversionHistoryManager::save() {
 
     QFile file(historyFilePath());
     if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        file.write(QJsonDocument(array).toJson(QJsonDocument::Indented));
+        // Compact JSON: full Indented rewrite on every job is O(history)
+        // and measurably slower on the GUI thread; compact halves I/O.
+        file.write(QJsonDocument(array).toJson(QJsonDocument::Compact));
     }
 }
 
@@ -162,11 +171,19 @@ void ConversionHistoryManager::load() {
         rec.finalOutputPath = obj["finalOutputPath"].toString();
         rec.outputFileSizeBytes = obj["outputFileSizeBytes"].toInteger();
         rec.engineName = obj["engineName"].toString();
-        rec.finalState = static_cast<JobState>(obj["finalState"].toInt());
+        const int stateInt = obj["finalState"].toInt(-1);
+        if (stateInt < static_cast<int>(JobState::Queued) ||
+            stateInt > static_cast<int>(JobState::Cancelled)) {
+            continue; // Skip corrupt record rather than propagating invalid enum.
+        }
+        rec.finalState = static_cast<JobState>(stateInt);
         rec.errorMessage = obj["errorMessage"].toString();
         rec.executedCommand = obj["executedCommand"].toString();
         rec.diagnosticOutput = obj["diagnosticOutput"].toString();
         rec.timestamp = QDateTime::fromString(obj["timestamp"].toString(), Qt::ISODate);
+        if (!rec.timestamp.isValid()) {
+            rec.timestamp = QDateTime::currentDateTime();
+        }
         rec.durationMs = obj["durationMs"].toInteger();
         rec.options = obj["options"].toObject().toVariantMap();
 

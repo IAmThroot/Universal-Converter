@@ -3,9 +3,11 @@
 #include "../app/AppSettings.h"
 #include "../core/SystemInfo.h"
 #include "../core/OutputPathPlanner.h"
+#include "../core/FormatRegistry.h"
 #include <QFileInfo>
 #include <QDir>
 #include <QUuid>
+#include <QSet>
 
 namespace uc::engines {
 
@@ -15,12 +17,28 @@ FfmpegEngine::FfmpegEngine(QObject* parent)
 }
 
 bool FfmpegEngine::canConvert(const QString& inputFormatId, const QString& outputFormatId) const {
-    const QString in = inputFormatId.toLower();
-    const QString out = outputFormatId.toLower();
+    const auto& registry = core::FormatRegistry::instance();
+    const QString in = registry.normalizeFormatId(inputFormatId);
+    const QString out = registry.normalizeFormatId(outputFormatId);
 
-    const QStringList videoFormats = {"mp4", "mkv", "webm", "mov", "avi", "wmv", "flv", "ts", "mts", "m2ts", "vob", "ogv", "3gp", "3g2", "asf", "mxf", "gxf", "nut", "amv", "rm", "rmvb"};
-    const QStringList audioFormats = {"mp3", "wav", "flac", "aac", "ogg", "oga", "opus", "m4a", "wma", "ac3", "aiff", "mp2", "au", "m4b", "voc", "qoa", "caf", "mogg", "mp1", "mpc", "dsd"};
-    const QStringList subtitleFormats = {"srt", "vtt", "ass", "ssa", "sub"};
+    // Single source of truth: delegate to FormatRegistry when both formats known.
+    // Falls back to legacy lists only for formats absent from the registry
+    // (e.g. legacy containers) to preserve backward compatibility.
+    const auto* inDef = registry.findById(in);
+    const auto* outDef = registry.findById(out);
+    if (inDef && outDef) {
+        const auto compat = registry.checkCompatibility(in, out);
+        if (!compat.isSupported || compat.responsibleEngine != "FFmpeg") {
+            return false;
+        }
+        if (out == "rm" || out == "rmvb") return false; // encode-restricted
+        if (in == "sub" && out == "sub") return false;  // 'sub' read-only
+        return true;
+    }
+
+    static const QSet<QString> videoFormats = {"mp4", "mkv", "webm", "mov", "avi", "wmv", "flv", "ts", "mts", "m2ts", "vob", "ogv", "3gp", "3g2", "asf", "mxf", "gxf", "nut", "amv", "rm", "rmvb"};
+    static const QSet<QString> audioFormats = {"mp3", "wav", "flac", "aac", "ogg", "oga", "opus", "m4a", "wma", "ac3", "aiff", "mp2", "au", "m4b", "voc", "qoa", "caf", "mogg", "mp1", "mpc", "dsd"};
+    static const QSet<QString> subtitleFormats = {"srt", "vtt", "ass", "ssa", "sub"};
 
     const bool inIsVideo = videoFormats.contains(in);
     const bool inIsAudio = audioFormats.contains(in);
@@ -74,7 +92,15 @@ bool FfmpegEngine::executeJob(std::shared_ptr<core::ConversionJob> job) {
 
     // 2. Prepare temporary output path in destination directory
     const QString finalOut = job->finalOutputPath();
+    if (finalOut.trimmed().isEmpty()) {
+        job->setError("Output path is empty; job was not planned correctly.");
+        return false;
+    }
     const QString tempOut = core::OutputPathPlanner::generateTemporaryOutputPath(finalOut);
+    if (tempOut.isEmpty()) {
+        job->setError("Failed to generate temporary output path.");
+        return false;
+    }
 
     ArgumentBuildResult argResult;
     if (isSubJob) {
@@ -209,21 +235,21 @@ void FfmpegEngine::onProcessFinished(const QString& jobId, const core::ProcessRe
         }
     } else {
         // Subtitle or Animated image validation: ensure file was produced and has non-zero size
-        QFileInfo outInfo(ctx->tempOutputPath);
-        if (!outInfo.exists() || outInfo.size() <= 16) {
+        QString prodError;
+        if (!core::OutputPathPlanner::validateProducedFile(ctx->tempOutputPath, 16, &prodError)) {
             QFile::remove(ctx->tempOutputPath);
-            ctx->job->setError("Conversion failed to produce a valid non-empty file.");
+            ctx->job->setError(prodError.isEmpty() ? "Output file empty or missing" : prodError);
             emit jobFinished(jobId, false, "Output file empty or missing");
             return;
         }
     }
 
-    // Publish final file (atomic rename or replace)
-    if (QFile::exists(ctx->finalOutputPath)) {
-        QFile::remove(ctx->finalOutputPath);
-    }
-    if (!QFile::rename(ctx->tempOutputPath, ctx->finalOutputPath)) {
-        ctx->job->setError(QString("Failed to move temporary file to final path: %1").arg(ctx->finalOutputPath));
+    // Publish final file (atomic replace — never deletes existing target on failure)
+    QString publishError;
+    if (!core::OutputPathPlanner::publishTempToFinal(ctx->tempOutputPath, ctx->finalOutputPath, &publishError)) {
+        ctx->job->setError(publishError.isEmpty()
+                               ? QString("Failed to move temporary file to final path: %1").arg(ctx->finalOutputPath)
+                               : publishError);
         emit jobFinished(jobId, false, "Filesystem publish failed");
         return;
     }

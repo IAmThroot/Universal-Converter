@@ -53,6 +53,20 @@ bool VectorPipeline::renderSvgToImageWithQt(const QString& inputPath,
     int targetW = options.width;
     int targetH = options.height;
 
+    // Clamp to a safe upper bound to prevent multi-GB QImage allocations / OOM.
+    constexpr int kMaxRasterDimension = 16384;
+    if (targetW > kMaxRasterDimension || targetH > kMaxRasterDimension) {
+        if (errorMessage) {
+            *errorMessage = QString("Requested dimensions %1x%2 exceed maximum %3px.")
+                                .arg(targetW).arg(targetH).arg(kMaxRasterDimension);
+        }
+        return false;
+    }
+    if (targetW < 0 || targetH < 0) {
+        if (errorMessage) *errorMessage = "Requested dimensions must be non-negative.";
+        return false;
+    }
+
     if (targetW <= 0 && targetH <= 0) {
         targetW = defaultSize.width();
         targetH = defaultSize.height();
@@ -67,11 +81,16 @@ bool VectorPipeline::renderSvgToImageWithQt(const QString& inputPath,
     }
 
     QImage image(targetW, targetH, QImage::Format_ARGB32_Premultiplied);
+    if (image.isNull()) {
+        if (errorMessage) *errorMessage = "Failed to allocate render surface (dimensions too large).";
+        return false;
+    }
 
     if (options.backgroundColor.isEmpty() || options.backgroundColor.toLower() == "transparent") {
         image.fill(Qt::transparent);
     } else {
-        image.fill(QColor(options.backgroundColor));
+        const QColor bg(options.backgroundColor);
+        image.fill(bg.isValid() ? bg : Qt::transparent);
     }
 
     QPainter painter(&image);

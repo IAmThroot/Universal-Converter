@@ -67,8 +67,15 @@ ImageInspectResult ImageInspector::inspect(const QString& magickPath, const QStr
             if (result.format.isEmpty()) {
                 result.format = parts.value(0);
             }
-            const int w = parts.value(1).toInt();
-            const int h = parts.value(2).toInt();
+            bool okW = false, okH = false;
+            const int w = parts.value(1).toInt(&okW);
+            const int h = parts.value(2).toInt(&okH);
+            if (!okW || !okH || w <= 0 || h <= 0) {
+                result.errorMessage = QString("Image has invalid dimensions: %1x%2.")
+                                          .arg(parts.value(1), parts.value(2));
+                result.isValid = false;
+                return result;
+            }
             if (result.width == 0 && result.height == 0) {
                 result.width = w;
                 result.height = h;

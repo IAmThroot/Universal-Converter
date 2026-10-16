@@ -56,9 +56,26 @@ ProcessResult ProcessRunner::executeSync(const QString& program, const QStringLi
     proc.setProcessEnvironment(cleanEnvironment());
     proc.start(program, arguments);
 
-    if (!proc.waitForFinished(timeoutMs)) {
+    // Distinguish "failed to start" (missing binary / permissions) from a
+    // genuine timeout. waitForStarted() returns false immediately when the
+    // OS cannot launch the process.
+    if (!proc.waitForStarted(3000)) {
+        res.exitReason = ProcessExitReason::FailedToStart;
+        res.timedOut = false;
+        res.durationMs = timer.elapsed();
+        res.exitCode = -1;
+        res.errorMessage = QString("Failed to start process '%1' (not found or permission denied).").arg(program);
+        return res;
+    }
+
+    // timeoutMs <= 0 means "no timeout" (aligned with async start()).
+    const bool hasTimeout = timeoutMs > 0;
+    const bool finished = hasTimeout ? proc.waitForFinished(timeoutMs)
+                                     : proc.waitForFinished(-1);
+    if (!finished) {
+        // Genuine timeout: forcefully terminate to avoid zombie / fd leaks.
         proc.kill();
-        proc.waitForFinished(200);
+        proc.waitForFinished(1000);
         res.exitReason = ProcessExitReason::TimedOut;
         res.timedOut = true;
         res.durationMs = timer.elapsed();
@@ -132,14 +149,22 @@ void ProcessRunner::onProcessStarted() {
 void ProcessRunner::onStdoutReady() {
     if (!m_process) return;
     const QByteArray chunk = m_process->readAllStandardOutput();
-    m_result.standardOutput.append(chunk);
+    // Cap buffered output (~2 MiB per stream) so high-frequency -progress
+    // output cannot accumulate gigabytes of RAM on long conversions.
+    constexpr qsizetype kMaxBufferedBytes = 2 * 1024 * 1024;
+    if (m_result.standardOutput.size() < kMaxBufferedBytes) {
+        m_result.standardOutput.append(chunk.left(kMaxBufferedBytes - m_result.standardOutput.size()));
+    }
     emit readyReadStandardOutput(chunk);
 }
 
 void ProcessRunner::onStderrReady() {
     if (!m_process) return;
     const QByteArray chunk = m_process->readAllStandardError();
-    m_result.standardError.append(chunk);
+    constexpr qsizetype kMaxBufferedBytes = 2 * 1024 * 1024;
+    if (m_result.standardError.size() < kMaxBufferedBytes) {
+        m_result.standardError.append(chunk.left(kMaxBufferedBytes - m_result.standardError.size()));
+    }
     emit readyReadStandardError(chunk);
 }
 

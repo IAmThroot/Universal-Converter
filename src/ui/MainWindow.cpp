@@ -137,7 +137,7 @@ void MainWindow::setupMenuBar() {
     auto* helpMenu = menuBar()->addMenu("&Help");
     helpMenu->addAction("&About Universal Converter", [this]() {
         QMessageBox::about(this, "About Universal Converter",
-            "<h3>Universal Converter 1.0</h3>"
+            "<h3>Universal Converter 1.1</h3>"
             "<p><b>Created & Developed by IAmThroot</b></p>"
             "<p>A high-performance, offline desktop converter powered by C++20 and Qt 6.</p>"
             "<p><a href=\"https://github.com/IAmThroot/Universal-Converter#readme\">Documentation & Source Code</a></p>");

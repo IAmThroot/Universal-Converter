@@ -199,15 +199,22 @@ DocumentValidationResult DocumentValidator::validate(const QString& filePath, co
         QFile pdfFile(filePath);
         if (pdfFile.open(QFile::ReadOnly)) {
             const qint64 tailSize = qMin(static_cast<qint64>(1024), result.fileSizeBytes);
-            if (pdfFile.seek(result.fileSizeBytes - tailSize)) {
-                const QByteArray tail = pdfFile.read(tailSize);
-                if (!tail.contains("%%EOF")) {
-                    result.errorMessage = "PDF file is truncated or damaged (missing %%EOF trailer marker).";
-                    return result;
-                }
+            if (!pdfFile.seek(result.fileSizeBytes - tailSize)) {
+                pdfFile.close();
+                file.close();
+                result.errorMessage = "PDF validation failed: could not seek to trailer (file truncated or modified during read).";
+                return result;
+            }
+            const QByteArray tail = pdfFile.read(tailSize);
+            if (!tail.contains("%%EOF")) {
+                pdfFile.close();
+                file.close();
+                result.errorMessage = "PDF file is truncated or damaged (missing %%EOF trailer marker).";
+                return result;
             }
             pdfFile.close();
         }
+        file.close();
 
         result.detectedType = "application/pdf";
     }
@@ -223,6 +230,7 @@ DocumentValidationResult DocumentValidator::validate(const QString& filePath, co
         result.detectedType = "text/plain";
     }
 
+    file.close();
     result.isValid = true;
     return result;
 }

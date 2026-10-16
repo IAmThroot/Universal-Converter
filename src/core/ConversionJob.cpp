@@ -49,9 +49,15 @@ bool ConversionJob::isTerminal() const {
 }
 
 bool ConversionJob::isValidTransition(JobState from, JobState to) const {
-    // Terminal states can never transition to any state
-    if (from == JobState::Completed || from == JobState::Failed || from == JobState::Cancelled) {
+    // Completed / Cancelled are strictly terminal and can never transition.
+    if (from == JobState::Completed || from == JobState::Cancelled) {
         return false;
+    }
+
+    // Failed may only re-enter the queue via a gated retry (orchestrator
+    // checks retryCount < maxRetries + transient error before calling this).
+    if (from == JobState::Failed) {
+        return to == JobState::Queued;
     }
 
     switch (from) {
@@ -59,7 +65,10 @@ bool ConversionJob::isValidTransition(JobState from, JobState to) const {
             return to == JobState::Preparing || to == JobState::Cancelled || to == JobState::Failed;
 
         case JobState::Preparing:
-            return to == JobState::Running || to == JobState::Cancelled || to == JobState::Failed;
+            // Preparing -> Queued allows unknown-engine recovery / re-dispatch
+            // without stranding the job (previously a dead/stuck path).
+            return to == JobState::Running || to == JobState::Cancelled || to == JobState::Failed ||
+                   to == JobState::Queued;
 
         case JobState::Running:
             return to == JobState::Completed || to == JobState::Failed || to == JobState::Cancelled;

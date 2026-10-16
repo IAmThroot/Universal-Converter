@@ -106,6 +106,11 @@ MediaProbeResult MediaProbe::parseJsonOutput(const QByteArray& jsonData, const Q
         }
     }
 
+    if (result.streams.isEmpty() && result.formatName.isEmpty()) {
+        result.errorMessage = "FFprobe returned no streams or format information (empty/invalid media).";
+        return result;
+    }
+
     result.isValid = true;
     return result;
 }

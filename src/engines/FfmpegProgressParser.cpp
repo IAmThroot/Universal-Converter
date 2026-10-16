@@ -19,7 +19,22 @@ void FfmpegProgressParser::reset() {
 
 QList<ProgressSnapshot> FfmpegProgressParser::feedChunk(const QByteArray& data) {
     QList<ProgressSnapshot> snapshots;
-    m_buffer.append(data);
+    // Cap line buffer (~1 MiB) so binary garbage / \r-only progress
+    // without newlines cannot grow memory unboundedly.
+    constexpr int kMaxBufferBytes = 1024 * 1024;
+    if (m_buffer.size() + data.size() > kMaxBufferBytes) {
+        const int excess = m_buffer.size() + data.size() - kMaxBufferBytes;
+        // Drop oldest bytes; progress data is append-only and recoverable.
+        m_buffer.remove(0, qMin(excess, m_buffer.size()));
+        // If a single chunk alone exceeds the cap, keep only its tail.
+        if (data.size() > kMaxBufferBytes) {
+            m_buffer.append(data.right(kMaxBufferBytes));
+        } else {
+            m_buffer.append(data);
+        }
+    } else {
+        m_buffer.append(data);
+    }
 
     int newlineIndex = -1;
     while ((newlineIndex = m_buffer.indexOf('\n')) != -1) {

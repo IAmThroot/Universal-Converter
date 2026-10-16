@@ -12,7 +12,7 @@ Application::Application(int& argc, char** argv)
     setApplicationDisplayName("Universal Converter");
     setOrganizationName("UniversalConverter");
     setOrganizationDomain("universal-converter.local");
-    setApplicationVersion("1.0.0");
+    setApplicationVersion("1.1.0");
     setWindowIcon(QIcon(":/app_icon.png"));
     setDesktopFileName("universal-converter");
 }

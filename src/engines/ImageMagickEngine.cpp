@@ -1,11 +1,13 @@
 #include "ImageMagickEngine.h"
 #include "../app/ToolchainManager.h"
 #include "../core/OutputPathPlanner.h"
+#include "../core/FormatRegistry.h"
 #include "VectorPipeline.h"
 #include "ImageOptimizer.h"
 #include <QFileInfo>
 #include <QDir>
 #include <QUuid>
+#include <QSet>
 
 namespace uc::engines {
 
@@ -17,6 +19,18 @@ ImageMagickEngine::ImageMagickEngine(QObject* parent)
 bool ImageMagickEngine::canConvert(const QString& inputFormatId, const QString& outputFormatId) const {
     if (VectorPipeline::canConvert(inputFormatId, outputFormatId)) {
         return true;
+    }
+
+    const auto& registry = core::FormatRegistry::instance();
+    const QString in = registry.normalizeFormatId(inputFormatId);
+    const QString out = registry.normalizeFormatId(outputFormatId);
+    const auto* inDef = registry.findById(in);
+    const auto* outDef = registry.findById(out);
+    if (inDef && outDef) {
+        const auto compat = registry.checkCompatibility(in, out);
+        // Registry is authoritative when both formats are known — prevents
+        // engine lists drifting from the central compatibility policy.
+        return compat.isSupported && compat.responsibleEngine == "ImageMagick";
     }
 
     const auto& caps = ImageMagickCapabilities::instance();
@@ -43,7 +57,15 @@ bool ImageMagickEngine::executeJob(std::shared_ptr<core::ConversionJob> job) {
     const QString inFormat = job->inputFormatId().toLower();
     const QString targetFormat = job->outputFormatId().toLower();
     const QString finalOut = job->finalOutputPath();
+    if (finalOut.trimmed().isEmpty()) {
+        job->setError("Output path is empty; job was not planned correctly.");
+        return false;
+    }
     const QString tempOut = core::OutputPathPlanner::generateTemporaryOutputPath(finalOut);
+    if (tempOut.isEmpty()) {
+        job->setError("Failed to generate temporary output path.");
+        return false;
+    }
 
     // 1. Vector Pipeline Fast-Path: SVG -> Raster/PDF
     if (inFormat == "svg") {
@@ -62,11 +84,11 @@ bool ImageMagickEngine::executeJob(std::shared_ptr<core::ConversionJob> job) {
 
         const auto vRes = VectorPipeline::convertSvg(inputPath, tempOut, vOpts);
         if (vRes.isSuccess && QFile::exists(tempOut) && QFileInfo(tempOut).size() > 0) {
-            if (QFile::exists(finalOut)) {
-                QFile::remove(finalOut);
-            }
-            if (!QFile::rename(tempOut, finalOut)) {
-                job->setError(QString("Failed to move temporary vector output to: %1").arg(finalOut));
+            QString publishError;
+            if (!core::OutputPathPlanner::publishTempToFinal(tempOut, finalOut, &publishError)) {
+                job->setError(publishError.isEmpty()
+                                  ? QString("Failed to move temporary vector output to: %1").arg(finalOut)
+                                  : publishError);
                 emit jobFinished(job->id(), false, "Filesystem publish failed");
                 return false;
             }
@@ -180,12 +202,12 @@ void ImageMagickEngine::onProcessFinished(const QString& jobId, const core::Proc
         return;
     }
 
-    // Publish final file
-    if (QFile::exists(ctx->finalOutputPath)) {
-        QFile::remove(ctx->finalOutputPath);
-    }
-    if (!QFile::rename(ctx->tempOutputPath, ctx->finalOutputPath)) {
-        ctx->job->setError(QString("Failed to move temporary file to final path: %1").arg(ctx->finalOutputPath));
+    // Publish final file (atomic replace)
+    QString publishError;
+    if (!core::OutputPathPlanner::publishTempToFinal(ctx->tempOutputPath, ctx->finalOutputPath, &publishError)) {
+        ctx->job->setError(publishError.isEmpty()
+                               ? QString("Failed to move temporary file to final path: %1").arg(ctx->finalOutputPath)
+                               : publishError);
         emit jobFinished(jobId, false, "Filesystem publish failed");
         return;
     }

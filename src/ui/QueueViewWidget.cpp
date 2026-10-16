@@ -1,6 +1,7 @@
 #include "QueueViewWidget.h"
 #include <QHeaderView>
 #include <QFileInfo>
+#include <QSet>
 #include <QDesktopServices>
 #include <QUrl>
 
@@ -92,18 +93,51 @@ void QueueViewWidget::setupUi() {
 }
 
 void QueueViewWidget::refreshQueue() {
-    m_treeWidget->clear();
     if (!m_orchestrator) return;
 
+    // Incremental update: reuse existing rows keyed by job id instead of
+    // full clear() + new QTreeWidgetItem per signal (jank at 100s of jobs).
     const auto jobs = m_orchestrator->allJobs();
+    QSet<QString> liveIds;
+    liveIds.reserve(jobs.size());
     for (const auto& job : jobs) {
+        liveIds.insert(job->id());
+    }
+    // Remove stale rows.
+    for (int i = m_treeWidget->topLevelItemCount() - 1; i >= 0; --i) {
+        auto* item = m_treeWidget->topLevelItem(i);
+        if (!liveIds.contains(item->data(0, Qt::UserRole).toString())) {
+            delete m_treeWidget->takeTopLevelItem(i);
+        }
+    }
+    // Upsert rows in queue order.
+    for (int row = 0; row < jobs.size(); ++row) {
+        const auto& job = jobs.at(row);
+        QTreeWidgetItem* item = nullptr;
+        // Find existing row by id (linear scan is fine; rows are UI-bounded).
+        for (int i = 0; i < m_treeWidget->topLevelItemCount(); ++i) {
+            auto* cand = m_treeWidget->topLevelItem(i);
+            if (cand->data(0, Qt::UserRole).toString() == job->id()) {
+                item = cand;
+                break;
+            }
+        }
+        if (!item) {
+            item = new QTreeWidgetItem();
+            item->setData(0, Qt::UserRole, job->id());
+            m_treeWidget->insertTopLevelItem(row, item);
+        } else {
+            const int cur = m_treeWidget->indexOfTopLevelItem(item);
+            if (cur != row) {
+                m_treeWidget->takeTopLevelItem(cur);
+                m_treeWidget->insertTopLevelItem(qMin(row, m_treeWidget->topLevelItemCount()), item);
+            }
+        }
         const QFileInfo fi(job->primaryInputPath());
-        auto* item = new QTreeWidgetItem(m_treeWidget);
         item->setText(0, fi.fileName());
         item->setText(1, job->outputFormatId().toUpper());
         item->setText(2, job->statusMessage());
         item->setText(3, core::engineTypeToString(job->engine()));
-        item->setData(0, Qt::UserRole, job->id());
 
         if (job->state() == core::JobState::Completed) {
             item->setForeground(2, QColor("#10b981"));
