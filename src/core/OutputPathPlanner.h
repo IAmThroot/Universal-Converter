@@ -31,6 +31,10 @@ public:
     static QString resolveUniquePath(const QString& targetFilePath);
     static QString generateTemporaryOutputPath(const QString& finalOutputPath);
 
+    static void reservePath(const QString& path);
+    static void releasePath(const QString& path);
+    static void clearReservedPaths();
+
     // Atomically publish tempPath -> finalPath without data loss.
     // Never deletes an existing finalPath unless the new file is in place:
     // existing target is moved to a .bak sidecar first, then restored on failure.

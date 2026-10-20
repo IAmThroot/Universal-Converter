@@ -2,6 +2,8 @@
 #include <QStandardPaths>
 #include <QDir>
 #include <QFile>
+#include <QSaveFile>
+#include <QThreadPool>
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -15,11 +17,13 @@ ConversionHistoryManager& ConversionHistoryManager::instance() {
 }
 
 ConversionHistoryManager::ConversionHistoryManager() {
+    m_writerPool.setMaxThreadCount(1);
     load();
 }
 
 ConversionHistoryManager::~ConversionHistoryManager() {
-    save();
+    save(true);
+    m_writerPool.waitForDone(2000);
 }
 
 QString ConversionHistoryManager::historyFilePath() const {
@@ -60,7 +64,8 @@ void ConversionHistoryManager::recordJob(const ConversionJob* job, qint64 durati
     record.finalState = job->state();
     record.errorMessage = job->errorMessage();
     record.executedCommand = job->executedCommand();
-    record.diagnosticOutput = job->diagnosticOutput();
+    const QString diag = job->diagnosticOutput();
+    record.diagnosticOutput = diag.size() > 32768 ? diag.left(32768) + "\n...[diagnostic output truncated]" : diag;
     record.timestamp = job->completedAt().isValid() ? job->completedAt() : QDateTime::currentDateTime();
     record.durationMs = durationMs;
     record.options = job->options();
@@ -87,7 +92,7 @@ void ConversionHistoryManager::clearHistory() {
         QMutexLocker locker(&m_mutex);
         m_records.clear();
     }
-    save();
+    save(true);
 }
 
 void ConversionHistoryManager::removeRecord(const QString& id) {
@@ -100,7 +105,7 @@ void ConversionHistoryManager::removeRecord(const QString& id) {
             }
         }
     }
-    save();
+    save(true);
 }
 
 void ConversionHistoryManager::setMaxRecords(int count) {
@@ -111,39 +116,52 @@ void ConversionHistoryManager::setMaxRecords(int count) {
     }
 }
 
-void ConversionHistoryManager::save() {
-    QMutexLocker locker(&m_mutex);
-    QJsonArray array;
-    for (const auto& rec : m_records) {
-        QJsonObject obj;
-        obj["id"] = rec.id;
-        obj["primaryInputPath"] = rec.primaryInputPath;
-        obj["inputFileName"] = rec.inputFileName;
-        obj["inputFileSizeBytes"] = rec.inputFileSizeBytes;
-        obj["inputFormatId"] = rec.inputFormatId;
-        obj["outputFormatId"] = rec.outputFormatId;
-        obj["finalOutputPath"] = rec.finalOutputPath;
-        obj["outputFileSizeBytes"] = rec.outputFileSizeBytes;
-        obj["engineName"] = rec.engineName;
-        obj["finalState"] = static_cast<int>(rec.finalState);
-        obj["errorMessage"] = rec.errorMessage;
-        obj["executedCommand"] = rec.executedCommand;
-        obj["diagnosticOutput"] = rec.diagnosticOutput;
-        obj["timestamp"] = rec.timestamp.toString(Qt::ISODate);
-        obj["durationMs"] = rec.durationMs;
-        obj["options"] = QJsonObject::fromVariantMap(rec.options);
-        array.append(obj);
+void ConversionHistoryManager::save(bool synchronous) {
+    QList<HistoryRecord> recordsCopy;
+    {
+        QMutexLocker locker(&m_mutex);
+        recordsCopy = m_records;
     }
 
-    QFile file(historyFilePath());
-    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        // Compact JSON: full Indented rewrite on every job is O(history)
-        // and measurably slower on the GUI thread; compact halves I/O.
-        file.write(QJsonDocument(array).toJson(QJsonDocument::Compact));
+    const QString path = historyFilePath();
+    auto saveTask = [records = std::move(recordsCopy), path]() {
+        QJsonArray array;
+        for (const auto& rec : records) {
+            QJsonObject obj;
+            obj["id"] = rec.id;
+            obj["primaryInputPath"] = rec.primaryInputPath;
+            obj["inputFileName"] = rec.inputFileName;
+            obj["inputFileSizeBytes"] = rec.inputFileSizeBytes;
+            obj["inputFormatId"] = rec.inputFormatId;
+            obj["outputFormatId"] = rec.outputFormatId;
+            obj["finalOutputPath"] = rec.finalOutputPath;
+            obj["outputFileSizeBytes"] = rec.outputFileSizeBytes;
+            obj["engineName"] = rec.engineName;
+            obj["finalState"] = static_cast<int>(rec.finalState);
+            obj["errorMessage"] = rec.errorMessage;
+            obj["executedCommand"] = rec.executedCommand;
+            obj["diagnosticOutput"] = rec.diagnosticOutput;
+            obj["timestamp"] = rec.timestamp.toString(Qt::ISODate);
+            obj["durationMs"] = rec.durationMs;
+            obj["options"] = QJsonObject::fromVariantMap(rec.options);
+            array.append(obj);
+        }
+
+        QSaveFile file(path);
+        if (file.open(QIODevice::WriteOnly)) {
+            file.write(QJsonDocument(array).toJson(QJsonDocument::Compact));
+            file.commit();
+        }
+    };
+
+    m_writerPool.start(saveTask);
+    if (synchronous) {
+        m_writerPool.waitForDone();
     }
 }
 
 void ConversionHistoryManager::load() {
+    m_writerPool.waitForDone(1000);
     QMutexLocker locker(&m_mutex);
     m_records.clear();
 

@@ -27,11 +27,13 @@ struct FfmpegConversionOptions {
     QString targetFormatId;
     ConversionPreset preset{ConversionPreset::Medium};
     HardwareEncoderMode hwMode{HardwareEncoderMode::Auto};
+    QString hwDevice;              // Custom/detected render device (e.g. /dev/dri/renderD128)
 
     // Video options
     bool hasVideo{true};
     QString customVideoCodec;
     int customVideoBitrateKbps{0}; // 0 = automatic / CRF based
+    int crf{-1};                   // -1 = automatic per codec
     int customWidth{0};
     int customHeight{0};
     int customFps{0};
@@ -82,7 +84,8 @@ private:
 
     static QStringList buildSpeedAndBitrateArgs(const QString& encoder,
                                                 ConversionPreset preset,
-                                                int videoBitrateKbps);
+                                                int videoBitrateKbps,
+                                                int crf = -1);
 };
 
 } // namespace uc::engines

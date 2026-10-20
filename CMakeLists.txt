@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 project(UniversalConverter
-    VERSION 1.1.0
+    VERSION 1.1.5
     DESCRIPTION "High-performance, standalone, offline cross-platform media and document converter"
     LANGUAGES CXX
 )

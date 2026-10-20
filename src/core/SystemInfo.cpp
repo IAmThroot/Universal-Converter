@@ -62,14 +62,31 @@ SystemCapabilities SystemInfo::probe() {
         // (e.g. ffmpeg might compile nvenc support, but libcuda.so or Nvidia GPU is absent in headless CI)
         // Result is cached globally (path+mtime key) so this runs at most once per binary.
         for (const auto& enc : candidateEncoders) {
+            QStringList probeArgs;
+            probeArgs << "-hide_banner" << "-loglevel" << "error";
+
+            if (enc.contains("vaapi")) {
+                QString dev = "/dev/dri/renderD128";
+                if (!QFile::exists(dev)) dev = "/dev/dri/card0";
+                if (!QFile::exists(dev)) {
+                    continue; // No DRM render node or device available
+                }
+                probeArgs << "-vaapi_device" << dev;
+                probeArgs << "-f" << "lavfi" << "-i" << "color=c=red:s=160x120:d=0.04";
+                probeArgs << "-vf" << "format=nv12,hwupload";
+            } else if (enc.contains("qsv")) {
+                probeArgs << "-init_hw_device" << "qsv=hw" << "-filter_hw_device" << "hw";
+                probeArgs << "-f" << "lavfi" << "-i" << "color=c=red:s=160x120:d=0.04";
+                probeArgs << "-vf" << "hwupload=extra_hw_frames=64,format=qsv";
+            } else {
+                probeArgs << "-f" << "lavfi" << "-i" << "color=c=red:s=160x120:d=0.04";
+            }
+
+            probeArgs << "-c:v" << enc << "-f" << "null" << "-";
+
             QProcess testProc;
             testProc.setProcessEnvironment(ProcessRunner::cleanEnvironment());
-            testProc.start(ffmpeg.executablePath, {
-                "-hide_banner", "-loglevel", "error",
-                "-f", "lavfi", "-i", "color=c=red:s=160x120:d=0.04",
-                "-c:v", enc,
-                "-f", "null", "-"
-            });
+            testProc.start(ffmpeg.executablePath, probeArgs);
             const bool done = testProc.waitForFinished(2000);
             if (!done) {
                 testProc.kill();

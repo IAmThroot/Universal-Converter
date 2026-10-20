@@ -4,8 +4,11 @@
 #include "OutputPathPlanner.h"
 #include "PresetRegistry.h"
 #include <QDir>
+#include <QDirIterator>
 #include <QFileInfo>
+#include <QDateTime>
 #include <QUuid>
+#include <algorithm>
 
 namespace uc::core {
 
@@ -84,6 +87,10 @@ WatchFolderConfig WatchFolderService::folderConfig(const QString& folderId) cons
     return m_folders.value(folderId);
 }
 
+bool WatchFolderService::hasFolder(const QString& folderId) const {
+    return m_folders.contains(folderId);
+}
+
 void WatchFolderService::scanAllNow() {
     for (const auto& cfg : m_folders) {
         if (cfg.isEnabled) {
@@ -110,11 +117,24 @@ void WatchFolderService::scanDirectory(const WatchFolderConfig& cfg) {
 
     QDir dir(cfg.folderPath);
     QDir::Filters filters = QDir::Files | QDir::NoSymLinks | QDir::Readable;
-    const auto entries = dir.entryInfoList(filters, QDir::Time);
+    QFileInfoList entries;
+    if (cfg.isRecursive) {
+        QDirIterator it(cfg.folderPath, filters, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            it.next();
+            entries.append(it.fileInfo());
+        }
+    } else {
+        entries = dir.entryInfoList(filters, QDir::Time);
+    }
 
     for (const auto& fi : entries) {
         const QString absPath = fi.absoluteFilePath();
-        if (m_processedFiles.contains(absPath)) continue;
+        const qint64 mtime = fi.lastModified().toMSecsSinceEpoch();
+        auto procIt = m_processedFiles.find(absPath);
+        if (procIt != m_processedFiles.end() && procIt.value() == mtime) {
+            continue;
+        }
 
         // Ignore temporary partial downloads
         const QString name = fi.fileName();
@@ -137,6 +157,7 @@ void WatchFolderService::scanDirectory(const WatchFolderConfig& cfg) {
             cand.folderId = cfg.id;
             cand.lastSize = fi.size();
             cand.stableCount = 0;
+            cand.zeroSizeCount = 0;
             m_pendingCandidates.insert(absPath, cand);
             emit fileDetected(absPath, cfg.id);
         }
@@ -160,6 +181,14 @@ void WatchFolderService::onPollTimerTimeout() {
         }
 
         const qint64 currentSize = fi.size();
+        if (currentSize == 0) {
+            cand.zeroSizeCount++;
+            // Evict files that remain 0-byte for over 60 poll intervals (60s)
+            if (cand.zeroSizeCount > 60) {
+                toRemove.append(path);
+                continue;
+            }
+        }
         if (currentSize == cand.lastSize && currentSize > 0) {
             cand.stableCount++;
             const auto cfg = m_folders.value(cand.folderId);
@@ -179,7 +208,31 @@ void WatchFolderService::onPollTimerTimeout() {
 
     for (const auto& path : toProcess) {
         PendingCandidate cand = m_pendingCandidates.take(path);
-        m_processedFiles.insert(path);
+        const qint64 mtime = QFileInfo(path).lastModified().toMSecsSinceEpoch();
+        m_processedFiles.insert(path, mtime);
+        // Bound memory: prune entries that no longer exist on disk (deleted/moved)
+        if (m_processedFiles.size() > 10000) {
+            for (auto it = m_processedFiles.begin(); it != m_processedFiles.end();) {
+                if (!QFile::exists(it.key())) {
+                    it = m_processedFiles.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            // If still exceeding 10,000, prune oldest entries by mtime
+            if (m_processedFiles.size() > 10000) {
+                QList<QPair<qint64, QString>> entries;
+                entries.reserve(m_processedFiles.size());
+                for (auto it = m_processedFiles.constBegin(); it != m_processedFiles.constEnd(); ++it) {
+                    entries.append({it.value(), it.key()});
+                }
+                std::sort(entries.begin(), entries.end());
+                int removeCount = m_processedFiles.size() - 8000;
+                for (int i = 0; i < removeCount; ++i) {
+                    m_processedFiles.remove(entries[i].second);
+                }
+            }
+        }
         processStableCandidate(cand);
     }
 }

@@ -215,16 +215,16 @@ const ConversionPreset* PresetRegistry::findById(const QString& id) const {
     return nullptr;
 }
 
-void PresetRegistry::registerCustomPreset(const ConversionPreset& preset) {
+void PresetRegistry::registerCustomPreset(const ConversionPreset& preset, bool autoSave) {
     for (int i = 0; i < m_presets.size(); ++i) {
         if (m_presets[i].id == preset.id) {
             m_presets[i] = preset;
-            saveCustomPresets();
+            if (autoSave) saveCustomPresets();
             return;
         }
     }
     m_presets.append(preset);
-    saveCustomPresets();
+    if (autoSave) saveCustomPresets();
 }
 
 bool PresetRegistry::removeCustomPreset(const QString& id) {
@@ -293,6 +293,7 @@ bool PresetRegistry::importProfilesFromJson(const QString& jsonString, QString* 
     }
 
     const auto arr = doc.array();
+    bool anyAdded = false;
     for (const auto& item : arr) {
         if (!item.isObject()) continue;
         const auto obj = item.toObject();
@@ -308,8 +309,13 @@ bool PresetRegistry::importProfilesFromJson(const QString& jsonString, QString* 
         p.isBuiltIn = false;
 
         if (!p.id.isEmpty() && !p.targetFormatId.isEmpty()) {
-            registerCustomPreset(p);
+            registerCustomPreset(p, false);
+            anyAdded = true;
         }
+    }
+
+    if (anyAdded) {
+        saveCustomPresets();
     }
 
     return true;

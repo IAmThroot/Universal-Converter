@@ -21,6 +21,9 @@ public:
 
 private slots:
     void onJobAdded(const QString& jobId);
+    void onJobStarted(const QString& jobId);
+    void onJobProgressChanged(const QString& jobId, int progress, const QString& statusMessage);
+    void onJobStateChanged(const QString& jobId, core::JobState state, const QString& message);
     void onJobFinished(const QString& jobId, core::JobState state);
     void onCancelSelected();
     void onClearCompleted();

@@ -44,6 +44,7 @@ private:
     QWidget* m_videoOptionsWidget{nullptr};
     QSpinBox* m_videoBitrateSpin{nullptr};
     QSpinBox* m_crfSpin{nullptr};
+    QComboBox* m_speedCombo{nullptr};
     QLineEdit* m_videoCodecEdit{nullptr};
     QLineEdit* m_audioCodecEdit{nullptr};
     QSpinBox* m_audioBitrateSpin{nullptr};
@@ -53,6 +54,9 @@ private:
     QSpinBox* m_qualitySpin{nullptr};
     QCheckBox* m_stripMetadataCheck{nullptr};
     QCheckBox* m_autoOrientCheck{nullptr};
+    QCheckBox* m_preserveAspectRatioCheck{nullptr};
+
+    QVariantMap m_existingOptions;
 };
 
 } // namespace uc::ui

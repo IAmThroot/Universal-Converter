@@ -12,7 +12,7 @@ Application::Application(int& argc, char** argv)
     setApplicationDisplayName("Universal Converter");
     setOrganizationName("UniversalConverter");
     setOrganizationDomain("universal-converter.local");
-    setApplicationVersion("1.1.0");
+    setApplicationVersion("1.1.5");
     setWindowIcon(QIcon(":/app_icon.png"));
     setDesktopFileName("universal-converter");
 }
@@ -26,8 +26,8 @@ bool Application::init() {
     // 2. Apply dark stylesheet
     ui::themes::ThemeManager::applyVertDarkTheme(this);
 
-    // 2. Discover external conversion tools
-    ToolchainManager::instance().scanAll();
+    // 2. Discover external conversion tools asynchronously
+    ToolchainManager::instance().scanAllAsync();
 
     // 3. Create and display main window
     m_mainWindow = std::make_unique<ui::MainWindow>();

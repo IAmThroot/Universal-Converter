@@ -63,6 +63,8 @@ public:
     QDateTime completedAt() const { return m_completedAt; }
 
     bool isCancellationRequested() const { return m_cancellationRequested; }
+    bool isFinishedHandled() const { return m_finishedHandled; }
+    void setFinishedHandled(bool handled) { m_finishedHandled = handled; }
 
     QVariantMap options() const { return m_options; }
     void setOptions(const QVariantMap& options) { m_options = options; }
@@ -110,6 +112,7 @@ private:
     QDateTime m_completedAt;
 
     bool m_cancellationRequested{false};
+    bool m_finishedHandled{false};
     QVariantMap m_options;
 
     QString m_executedCommand;

@@ -21,6 +21,9 @@ ImagePreviewDialog::ImagePreviewDialog(const QString& sourceImagePath,
 
     m_sourceImage.load(m_sourcePath);
     m_sourceSizeBytes = QFileInfo(m_sourcePath).size();
+    if (!m_sourceImage.isNull()) {
+        m_previewBaseImage = m_sourceImage.scaled(700, 540, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
 
     setupUi();
     updatePreview();
@@ -116,38 +119,42 @@ void ImagePreviewDialog::onQualitySliderChanged(int value) {
 }
 
 void ImagePreviewDialog::updatePreview() {
-    if (m_sourceImage.isNull()) return;
-
-    // Simulate in-memory encoded compression
-    QByteArray bufferData;
-    QBuffer buffer(&bufferData);
-    buffer.open(QIODevice::WriteOnly);
+    if (m_sourceImage.isNull() || m_previewBaseImage.isNull()) return;
 
     const QString fmtUpper = m_targetFormatId.toUpper();
-    const char* qtFormat = "JPEG";
+    const char* qtFormat = nullptr;
     if (fmtUpper == "WEBP") qtFormat = "WEBP";
     else if (fmtUpper == "PNG") qtFormat = "PNG";
     else if (fmtUpper == "BMP") qtFormat = "BMP";
+    else if (fmtUpper == "JPG" || fmtUpper == "JPEG") qtFormat = "JPEG";
 
-    m_sourceImage.save(&buffer, qtFormat, m_quality);
+    if (qtFormat != nullptr) {
+        // Fast in-memory preview compression on the pre-scaled image (<2ms)
+        QByteArray bufferData;
+        QBuffer buffer(&bufferData);
+        buffer.open(QIODevice::WriteOnly);
+        m_previewBaseImage.save(&buffer, qtFormat, m_quality);
 
-    QImage compressedImg;
-    compressedImg.loadFromData(bufferData);
-
-    if (!compressedImg.isNull()) {
-        m_previewImgLabel->setPixmap(QPixmap::fromImage(compressedImg).scaled(350, 270, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        QImage compressedImg;
+        compressedImg.loadFromData(bufferData);
+        if (!compressedImg.isNull()) {
+            m_previewImgLabel->setPixmap(QPixmap::fromImage(compressedImg).scaled(350, 270, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        }
+    } else {
+        // Format not supported natively by in-memory Qt encoder (e.g. AVIF, HEIC, TIFF, ICO).
+        // Display base preview without lying about JPEG artifacts.
+        m_previewImgLabel->setPixmap(QPixmap::fromImage(m_previewBaseImage).scaled(350, 270, Qt::KeepAspectRatio, Qt::SmoothTransformation));
     }
 
-    qint64 simulatedBytes = bufferData.size();
-    if (simulatedBytes == 0) {
-        core::MediaEstimationInput input;
-        input.sourceSizeBytes = m_sourceSizeBytes;
-        input.sourceWidth = m_sourceImage.width();
-        input.sourceHeight = m_sourceImage.height();
-        input.targetFormatId = m_targetFormatId;
-        input.targetQuality = m_quality;
-        simulatedBytes = core::MediaEstimator::estimateMediaOutput(input).estimatedSizeBytes;
-    }
+    // Always calculate accurate format-specific size estimate using MediaEstimator
+    core::MediaEstimationInput input;
+    input.sourceSizeBytes = m_sourceSizeBytes;
+    input.sourceWidth = m_sourceImage.width();
+    input.sourceHeight = m_sourceImage.height();
+    input.targetFormatId = m_targetFormatId;
+    input.targetQuality = m_quality;
+    const auto estimation = core::MediaEstimator::estimateMediaOutput(input);
+    const qint64 simulatedBytes = estimation.estimatedSizeBytes;
 
     double deltaPercent = 0.0;
     if (m_sourceSizeBytes > 0) {
@@ -157,8 +164,12 @@ void ImagePreviewDialog::updatePreview() {
     QString deltaStr = (deltaPercent > 0) ? QString("+%1%").arg(QString::number(deltaPercent, 'f', 1))
                                           : QString("%1%").arg(QString::number(deltaPercent, 'f', 1));
 
-    m_previewInfoLabel->setText(QString("Est. Size: %1 (%2)")
-                                    .arg(core::MediaEstimator::formatBytes(simulatedBytes), deltaStr));
+    QString infoText = QString("Est. Size: %1 (%2)")
+                           .arg(core::MediaEstimator::formatBytes(simulatedBytes), deltaStr);
+    if (qtFormat == nullptr) {
+        infoText += QString(" [Format %1 estimated via engine model]").arg(fmtUpper);
+    }
+    m_previewInfoLabel->setText(infoText);
 }
 
 } // namespace uc::ui

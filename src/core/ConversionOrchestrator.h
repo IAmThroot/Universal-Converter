@@ -61,6 +61,8 @@ public:
 signals:
     void jobAdded(const QString& jobId);
     void jobStarted(const QString& jobId);
+    void jobProgressChanged(const QString& jobId, int progress, const QString& statusMessage);
+    void jobStateChanged(const QString& jobId, JobState state, const QString& message);
     void jobFinished(const QString& jobId, JobState state);
     void jobRemoved(const QString& jobId);
     void queueDrained();

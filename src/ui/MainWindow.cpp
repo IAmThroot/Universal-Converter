@@ -137,7 +137,7 @@ void MainWindow::setupMenuBar() {
     auto* helpMenu = menuBar()->addMenu("&Help");
     helpMenu->addAction("&About Universal Converter", [this]() {
         QMessageBox::about(this, "About Universal Converter",
-            "<h3>Universal Converter 1.1</h3>"
+            "<h3>Universal Converter 1.1.5</h3>"
             "<p><b>Created & Developed by IAmThroot</b></p>"
             "<p>A high-performance, offline desktop converter powered by C++20 and Qt 6.</p>"
             "<p><a href=\"https://github.com/IAmThroot/Universal-Converter#readme\">Documentation & Source Code</a></p>");
@@ -150,10 +150,17 @@ void MainWindow::setupStatusBar() {
 
     statusBar()->addWidget(m_statusLabel, 1);
     statusBar()->addPermanentWidget(m_toolchainStatusLabel);
+
+    updateToolchainStatus();
 }
 
 void MainWindow::updateToolchainStatus() {
     const auto& tc = app::ToolchainManager::instance();
+    if (tc.isScanning()) {
+        m_toolchainStatusLabel->setText("Scanning tools...");
+        return;
+    }
+
     auto formatTool = [](const char* name, const app::ResolvedTool& tool) -> QString {
         if (tool.isAvailable) {
             return QString("%1: ✓ (%2)").arg(name, tool.sourceDescription());
@@ -297,9 +304,23 @@ void MainWindow::syncWatchFolders() {
     if (!doc.isArray()) return;
 
     const auto arr = doc.array();
+    QSet<QString> activeFolderIds;
     for (const auto& val : arr) {
         const auto cfg = core::WatchFolderConfig::fromJson(val.toObject());
-        m_watchFolderService->addFolder(cfg);
+        activeFolderIds.insert(cfg.id);
+        if (m_watchFolderService->hasFolder(cfg.id)) {
+            m_watchFolderService->updateFolder(cfg);
+        } else {
+            m_watchFolderService->addFolder(cfg);
+        }
+        m_watchFolderService->setFolderEnabled(cfg.id, cfg.isEnabled);
+    }
+
+    // Remove any folders that were removed in Settings
+    for (const auto& existing : m_watchFolderService->configuredFolders()) {
+        if (!activeFolderIds.contains(existing.id)) {
+            m_watchFolderService->removeFolder(existing.id);
+        }
     }
 }
 

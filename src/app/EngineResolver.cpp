@@ -1,4 +1,5 @@
 #include "EngineResolver.h"
+#include "../core/ProcessRunner.h"
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
@@ -13,21 +14,7 @@ QString EngineResolver::defaultAppDirPath() {
 }
 
 QProcessEnvironment EngineResolver::cleanProcessEnvironment() {
-    auto env = QProcessEnvironment::systemEnvironment();
-    // In an AppImage, LD_LIBRARY_PATH contains the bundled libs which crash host binaries
-    // like ffmpeg and imagemagick due to mismatched system font/image library ABIs.
-    // If ORIGINAL_LD_LIBRARY_PATH was recorded by AppRun, restore it; otherwise remove LD_LIBRARY_PATH.
-    if (env.contains("ORIGINAL_LD_LIBRARY_PATH")) {
-        const QString orig = env.value("ORIGINAL_LD_LIBRARY_PATH");
-        if (orig.isEmpty()) {
-            env.remove("LD_LIBRARY_PATH");
-        } else {
-            env.insert("LD_LIBRARY_PATH", orig);
-        }
-    } else if (env.contains("APPIMAGE") || env.contains("APPDIR")) {
-        env.remove("LD_LIBRARY_PATH");
-    }
-    return env;
+    return core::ProcessRunner::cleanEnvironment();
 }
 
 ResolvedTool EngineResolver::resolve(const QString& toolName,
@@ -122,6 +109,7 @@ ResolvedTool EngineResolver::resolve(const QString& toolName,
         const QFileInfo fi(candidate);
         if (fi.exists() && fi.isExecutable()) {
             QProcess proc;
+            proc.setProcessEnvironment(cleanProcessEnvironment());
             proc.start(candidate, QStringList{versionArg});
             if (proc.waitForFinished(3000) && proc.exitStatus() == QProcess::NormalExit && proc.exitCode() == 0) {
                 tool.source = ToolSource::Bundled;

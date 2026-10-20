@@ -4,6 +4,7 @@
 #include <QFileSystemWatcher>
 #include <QTimer>
 #include <QMap>
+#include <QHash>
 #include <QSet>
 #include <memory>
 #include "WatchFolderConfig.h"
@@ -27,6 +28,7 @@ public:
 
     QList<WatchFolderConfig> configuredFolders() const;
     WatchFolderConfig folderConfig(const QString& folderId) const;
+    bool hasFolder(const QString& folderId) const;
 
     void scanAllNow();
     void clearHistory();
@@ -46,6 +48,7 @@ private:
         QString folderId;
         qint64 lastSize{0};
         int stableCount{0};
+        int zeroSizeCount{0};
     };
 
     void scanDirectory(const WatchFolderConfig& cfg);
@@ -58,7 +61,7 @@ private:
     QMap<QString, WatchFolderConfig> m_folders;         // keyed by config id
     QMap<QString, QString> m_pathToFolderId;            // watched directory path -> folder id
     QMap<QString, PendingCandidate> m_pendingCandidates;// filePath -> PendingCandidate
-    QSet<QString> m_processedFiles;                     // Avoid duplicate processing of same files
+    QHash<QString, qint64> m_processedFiles;            // filePath -> mtime, avoids duplicate processing under KeepOriginal
 };
 
 } // namespace uc::core

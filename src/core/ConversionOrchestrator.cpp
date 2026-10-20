@@ -1,5 +1,7 @@
 #include "ConversionOrchestrator.h"
 #include "ConversionHistoryManager.h"
+#include "OutputPathPlanner.h"
+#include "../app/ToolchainManager.h"
 #include "../engines/FfmpegEngine.h"
 #include "../engines/ImageMagickEngine.h"
 #include "../engines/PandocEngine.h"
@@ -11,6 +13,8 @@ ConversionOrchestrator::ConversionOrchestrator(int maxConcurrency, QObject* pare
     : QObject(parent)
     , m_maxConcurrency(qMax(1, maxConcurrency))
 {
+    connect(&app::ToolchainManager::instance(), &app::ToolchainManager::toolchainStatusChanged,
+            this, &ConversionOrchestrator::pumpQueue);
 }
 
 ConversionOrchestrator::~ConversionOrchestrator() {
@@ -21,9 +25,12 @@ void ConversionOrchestrator::setFfmpegEngine(std::shared_ptr<engines::FfmpegEngi
     m_ffmpegEngine = engine;
     if (m_ffmpegEngine) {
         connect(m_ffmpegEngine.get(), &engines::FfmpegEngine::jobFinished, this,
-                [this](const QString& jobId, bool /*success*/, const QString& /*msg*/) {
+                [this](const QString& jobId, bool success, const QString& /*msg*/) {
                     auto job = findJob(jobId);
-                    onJobFinishedInternal(jobId, job ? job->state() : JobState::Completed);
+                    JobState state = (job && job->state() == JobState::Cancelled)
+                                         ? JobState::Cancelled
+                                         : (success ? JobState::Completed : JobState::Failed);
+                    onJobFinishedInternal(jobId, state);
                 });
     }
 }
@@ -32,9 +39,12 @@ void ConversionOrchestrator::setImageMagickEngine(std::shared_ptr<engines::Image
     m_imageMagickEngine = engine;
     if (m_imageMagickEngine) {
         connect(m_imageMagickEngine.get(), &engines::ImageMagickEngine::jobFinished, this,
-                [this](const QString& jobId, bool /*success*/, const QString& /*msg*/) {
+                [this](const QString& jobId, bool success, const QString& /*msg*/) {
                     auto job = findJob(jobId);
-                    onJobFinishedInternal(jobId, job ? job->state() : JobState::Completed);
+                    JobState state = (job && job->state() == JobState::Cancelled)
+                                         ? JobState::Cancelled
+                                         : (success ? JobState::Completed : JobState::Failed);
+                    onJobFinishedInternal(jobId, state);
                 });
     }
 }
@@ -43,9 +53,12 @@ void ConversionOrchestrator::setPandocEngine(std::shared_ptr<engines::PandocEngi
     m_pandocEngine = engine;
     if (m_pandocEngine) {
         connect(m_pandocEngine.get(), &engines::PandocEngine::jobFinished, this,
-                [this](const QString& jobId, bool /*success*/, const QString& /*msg*/) {
+                [this](const QString& jobId, bool success, const QString& /*msg*/) {
                     auto job = findJob(jobId);
-                    onJobFinishedInternal(jobId, job ? job->state() : JobState::Completed);
+                    JobState state = (job && job->state() == JobState::Cancelled)
+                                         ? JobState::Cancelled
+                                         : (success ? JobState::Completed : JobState::Failed);
+                    onJobFinishedInternal(jobId, state);
                 });
     }
 }
@@ -65,6 +78,12 @@ void ConversionOrchestrator::addJob(std::shared_ptr<ConversionJob> job) {
 
     connect(job.get(), &ConversionJob::cancellationRequested, this, [this, id = job->id()]() {
         cancelJob(id);
+    });
+    connect(job.get(), &ConversionJob::progressChanged, this, [this, id = job->id()](int progress, const QString& msg) {
+        emit jobProgressChanged(id, progress, msg);
+    });
+    connect(job.get(), &ConversionJob::stateChanged, this, [this, id = job->id(), jobPtr = job.get()](JobState state, JobState /*oldState*/) {
+        emit jobStateChanged(id, state, jobPtr->statusMessage());
     });
 
     emit jobAdded(job->id());
@@ -100,6 +119,10 @@ void ConversionOrchestrator::cancelAllJobs() {
 }
 
 void ConversionOrchestrator::removeJob(const QString& jobId) {
+    auto job = findJob(jobId);
+    if (job) {
+        OutputPathPlanner::releasePath(job->finalOutputPath());
+    }
     cancelJob(jobId);
 
     if (m_jobMap.contains(jobId)) {
@@ -179,6 +202,10 @@ bool ConversionOrchestrator::isTransientError(const QString& errorMsg, const QSt
 }
 
 void ConversionOrchestrator::pumpQueue() {
+    if (app::ToolchainManager::instance().isScanning()) {
+        return; // Defer launching jobs until toolchain scan completes
+    }
+
     while (m_runningJobs.size() < m_maxConcurrency) {
         std::shared_ptr<ConversionJob> nextJob = nullptr;
         for (const auto& j : m_jobs) {
@@ -256,25 +283,52 @@ void ConversionOrchestrator::pumpQueue() {
 
 void ConversionOrchestrator::onJobFinishedInternal(const QString& jobId, JobState finalState) {
     auto job = findJob(jobId);
-    if (job) {
-        // Targeted transient retry (only if failed, retryCount == 0, and transient)
-        if (finalState == JobState::Failed && job->retryCount() < 1 &&
-            isTransientError(job->errorMessage(), job->diagnosticOutput())) {
-            job->incrementRetryCount();
-            m_runningJobs.remove(jobId);
-            job->transitionTo(JobState::Queued, "Retrying after transient failure...");
-            QTimer::singleShot(500, this, &ConversionOrchestrator::pumpQueue);
-            return;
-        }
-
-        qint64 durationMs = 0;
-        if (job->startedAt().isValid() && job->completedAt().isValid()) {
-            durationMs = job->startedAt().msecsTo(job->completedAt());
-        }
-        ConversionHistoryManager::instance().recordJob(job.get(), durationMs);
+    if (!job) {
+        m_runningJobs.remove(jobId);
+        return;
     }
 
+    // Preserve cancellation or terminal state accurately
+    if (job->state() == JobState::Cancelled) {
+        finalState = JobState::Cancelled;
+    } else if (job->isTerminal()) {
+        finalState = job->state();
+    }
+
+    // Guard against duplicate execution: only handle completion once per run
+    if (job->isFinishedHandled()) {
+        m_runningJobs.remove(jobId);
+        return;
+    }
+
+    // Targeted transient retry (only if failed, retryCount == 0, and transient)
+    if (finalState == JobState::Failed && job->retryCount() < 1 &&
+        isTransientError(job->errorMessage(), job->diagnosticOutput())) {
+        job->incrementRetryCount();
+        m_runningJobs.remove(jobId);
+        job->transitionTo(JobState::Queued, "Retrying after transient failure...");
+        QTimer::singleShot(500, this, &ConversionOrchestrator::pumpQueue);
+        return;
+    }
+
+    job->setFinishedHandled(true);
+
+    // Transition job to the final state if not already there
+    if (job->state() != finalState) {
+        const QString msg = (finalState == JobState::Failed && !job->errorMessage().isEmpty())
+                                ? job->errorMessage()
+                                : (finalState == JobState::Completed ? "Completed" : "Cancelled");
+        job->transitionTo(finalState, msg);
+    }
+
+    qint64 durationMs = 0;
+    if (job->startedAt().isValid() && job->completedAt().isValid()) {
+        durationMs = job->startedAt().msecsTo(job->completedAt());
+    }
+    ConversionHistoryManager::instance().recordJob(job.get(), durationMs);
+
     m_runningJobs.remove(jobId);
+    OutputPathPlanner::releasePath(job->finalOutputPath());
 
     emit jobFinished(jobId, finalState);
     QTimer::singleShot(0, this, &ConversionOrchestrator::pumpQueue);

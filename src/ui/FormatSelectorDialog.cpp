@@ -148,7 +148,19 @@ void FormatSelectorDialog::setupPresetSection(QVBoxLayout* layout) {
     m_presetCombo = new QComboBox(presetBox);
     comboRow->addWidget(m_presetCombo, 1);
 
-    auto* newPresetBtn = new QPushButton("+ New Preset", presetBox);
+    m_editPresetBtn = new QPushButton("Edit", presetBox);
+    m_editPresetBtn->setEnabled(false);
+    m_editPresetBtn->setStyleSheet("background-color: #475569; color: white; padding: 6px 12px; border-radius: 4px; font-weight: bold;");
+    connect(m_editPresetBtn, &QPushButton::clicked, this, &FormatSelectorDialog::onEditPresetClicked);
+    comboRow->addWidget(m_editPresetBtn);
+
+    m_deletePresetBtn = new QPushButton("Delete", presetBox);
+    m_deletePresetBtn->setEnabled(false);
+    m_deletePresetBtn->setStyleSheet("background-color: #dc2626; color: white; padding: 6px 12px; border-radius: 4px; font-weight: bold;");
+    connect(m_deletePresetBtn, &QPushButton::clicked, this, &FormatSelectorDialog::onDeletePresetClicked);
+    comboRow->addWidget(m_deletePresetBtn);
+
+    auto* newPresetBtn = new QPushButton("+ New", presetBox);
     newPresetBtn->setStyleSheet("background-color: #3b82f6; color: white; padding: 6px 12px; border-radius: 4px; font-weight: bold;");
     connect(newPresetBtn, &QPushButton::clicked, this, &FormatSelectorDialog::onNewPresetClicked);
     comboRow->addWidget(newPresetBtn);
@@ -180,6 +192,9 @@ void FormatSelectorDialog::refreshPresets() {
         const QString icon = p.isBuiltIn ? "⚡" : "⭐";
         m_presetCombo->addItem(QString("%1 %2 (%3)").arg(icon, p.name, p.targetFormatId.toUpper()), p.id);
     }
+
+    if (m_editPresetBtn) m_editPresetBtn->setEnabled(false);
+    if (m_deletePresetBtn) m_deletePresetBtn->setEnabled(false);
 }
 
 void FormatSelectorDialog::onNewPresetClicked() {
@@ -200,11 +215,46 @@ void FormatSelectorDialog::onNewPresetClicked() {
     }
 }
 
+void FormatSelectorDialog::onEditPresetClicked() {
+    if (!m_presetCombo || m_presetCombo->currentIndex() <= 0) return;
+    const QString presetId = m_presetCombo->currentData().toString();
+    const auto* preset = core::PresetRegistry::instance().findById(presetId);
+    if (!preset || preset->isBuiltIn) return;
+
+    const auto* srcFmt = core::FormatRegistry::instance().findById(m_sourceFormatId);
+    const auto cat = srcFmt ? srcFmt->category : core::MediaCategory::Video;
+
+    PresetEditorDialog dlg(cat, preset, this);
+    if (dlg.exec() == QDialog::Accepted) {
+        refreshPresets();
+        for (int i = 0; i < m_presetCombo->count(); ++i) {
+            if (m_presetCombo->itemData(i).toString() == presetId) {
+                m_presetCombo->setCurrentIndex(i);
+                break;
+            }
+        }
+    }
+}
+
+void FormatSelectorDialog::onDeletePresetClicked() {
+    if (!m_presetCombo || m_presetCombo->currentIndex() <= 0) return;
+    const QString presetId = m_presetCombo->currentData().toString();
+    const auto* preset = core::PresetRegistry::instance().findById(presetId);
+    if (!preset || preset->isBuiltIn) return;
+
+    core::PresetRegistry::instance().removeCustomPreset(presetId);
+    m_selectedPresetId.clear();
+    m_selectedPresetOptions.clear();
+    refreshPresets();
+}
+
 void FormatSelectorDialog::onPresetSelected(int index) {
     if (!m_presetCombo || index <= 0) {
         if (m_presetDescLabel) m_presetDescLabel->clear();
         m_selectedPresetId.clear();
         m_selectedPresetOptions.clear();
+        if (m_editPresetBtn) m_editPresetBtn->setEnabled(false);
+        if (m_deletePresetBtn) m_deletePresetBtn->setEnabled(false);
         return;
     }
 
@@ -215,6 +265,9 @@ void FormatSelectorDialog::onPresetSelected(int index) {
     m_selectedPresetId = preset->id;
     m_selectedPresetOptions = preset->options;
     m_presetDescLabel->setText(preset->description);
+
+    if (m_editPresetBtn) m_editPresetBtn->setEnabled(!preset->isBuiltIn);
+    if (m_deletePresetBtn) m_deletePresetBtn->setEnabled(!preset->isBuiltIn);
 
     // Select target format in list
     for (int i = 0; i < m_listWidget->count(); ++i) {
@@ -280,6 +333,25 @@ void FormatSelectorDialog::onItemSelectionChanged() {
 
     const QString formatId = item->data(Qt::UserRole).toString();
     updateDetailPanel(formatId);
+
+    // If current format does not match the active preset's targetFormatId, clear stale preset options
+    if (!m_selectedPresetId.isEmpty()) {
+        const auto* preset = core::PresetRegistry::instance().findById(m_selectedPresetId);
+        if (!preset || preset->targetFormatId != formatId) {
+            m_selectedPresetId.clear();
+            m_selectedPresetOptions.clear();
+            if (m_presetCombo) {
+                m_presetCombo->blockSignals(true);
+                m_presetCombo->setCurrentIndex(0);
+                m_presetCombo->blockSignals(false);
+            }
+            if (m_presetDescLabel) {
+                m_presetDescLabel->clear();
+            }
+            if (m_editPresetBtn) m_editPresetBtn->setEnabled(false);
+            if (m_deletePresetBtn) m_deletePresetBtn->setEnabled(false);
+        }
+    }
 }
 
 void FormatSelectorDialog::updateDetailPanel(const QString& formatId) {
@@ -305,8 +377,16 @@ void FormatSelectorDialog::updateDetailPanel(const QString& formatId) {
     m_detailLabel->setText(text);
 }
 
-void FormatSelectorDialog::onFilterTextChanged(const QString& /*text*/) {
-    populateFormats();
+void FormatSelectorDialog::onFilterTextChanged(const QString& text) {
+    const QString filter = text.trimmed().toLower();
+    for (int i = 0; i < m_listWidget->count(); ++i) {
+        auto* item = m_listWidget->item(i);
+        if (!item) continue;
+        const QString fmtId = item->data(Qt::UserRole).toString().toLower();
+        const QString textLabel = item->text().toLower();
+        const bool match = filter.isEmpty() || fmtId.contains(filter) || textLabel.contains(filter);
+        item->setHidden(!match);
+    }
 }
 
 void FormatSelectorDialog::onItemDoubleClicked(QListWidgetItem* item) {

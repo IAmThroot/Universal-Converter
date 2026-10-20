@@ -14,12 +14,13 @@ AppSettings::AppSettings()
 }
 
 int AppSettings::maxConcurrentJobs() const {
-    const int defaultJobs = qMax(1, QThread::idealThreadCount() - 1);
+    const int threadCount = QThread::idealThreadCount();
+    const int defaultJobs = qBound(1, threadCount > 0 ? (threadCount <= 4 ? threadCount : 4) : 2, 8);
     return m_settings.value("general/maxConcurrentJobs", defaultJobs).toInt();
 }
 
 void AppSettings::setMaxConcurrentJobs(int jobs) {
-    m_settings.setValue("general/maxConcurrentJobs", qMax(1, jobs));
+    m_settings.setValue("general/maxConcurrentJobs", qBound(1, jobs, 16));
 }
 
 bool AppSettings::hardwareAccelerationEnabled() const {

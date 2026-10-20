@@ -15,6 +15,9 @@ QueueViewWidget::QueueViewWidget(std::shared_ptr<core::ConversionOrchestrator> o
 
     if (m_orchestrator) {
         connect(m_orchestrator.get(), &core::ConversionOrchestrator::jobAdded, this, &QueueViewWidget::onJobAdded);
+        connect(m_orchestrator.get(), &core::ConversionOrchestrator::jobStarted, this, &QueueViewWidget::onJobStarted);
+        connect(m_orchestrator.get(), &core::ConversionOrchestrator::jobProgressChanged, this, &QueueViewWidget::onJobProgressChanged);
+        connect(m_orchestrator.get(), &core::ConversionOrchestrator::jobStateChanged, this, &QueueViewWidget::onJobStateChanged);
         connect(m_orchestrator.get(), &core::ConversionOrchestrator::jobFinished, this, &QueueViewWidget::onJobFinished);
         connect(m_orchestrator.get(), &core::ConversionOrchestrator::jobRemoved, this, [this](const QString&) { refreshQueue(); });
     }
@@ -166,8 +169,76 @@ void QueueViewWidget::refreshQueue() {
     }
 }
 
+static QTreeWidgetItem* findItemByJobId(QTreeWidget* tree, const QString& jobId) {
+    if (!tree) return nullptr;
+    for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+        auto* item = tree->topLevelItem(i);
+        if (item && item->data(0, Qt::UserRole).toString() == jobId) {
+            return item;
+        }
+    }
+    return nullptr;
+}
+
 void QueueViewWidget::onJobAdded(const QString& /*jobId*/) {
     refreshQueue();
+}
+
+void QueueViewWidget::onJobStarted(const QString& jobId) {
+    auto* item = findItemByJobId(m_treeWidget, jobId);
+    if (item) {
+        item->setText(2, "Running...");
+        item->setForeground(2, QColor("#38bdf8"));
+    }
+}
+
+void QueueViewWidget::onJobProgressChanged(const QString& jobId, int progress, const QString& statusMessage) {
+    auto* item = findItemByJobId(m_treeWidget, jobId);
+    if (!item) return;
+
+    QString text;
+    if (progress >= 0) {
+        text = statusMessage.isEmpty() ? QString("%1%").arg(progress)
+                                       : QString("%1% - %2").arg(progress).arg(statusMessage);
+    } else {
+        text = statusMessage.isEmpty() ? "Processing..." : statusMessage;
+    }
+    item->setText(2, text);
+    item->setForeground(2, QColor("#38bdf8"));
+}
+
+void QueueViewWidget::onJobStateChanged(const QString& jobId, core::JobState state, const QString& message) {
+    auto* item = findItemByJobId(m_treeWidget, jobId);
+    if (!item) return;
+
+    QString text = message;
+    switch (state) {
+        case core::JobState::Queued:
+            if (text.isEmpty()) text = "Queued";
+            item->setForeground(2, QColor("#a1a1aa"));
+            break;
+        case core::JobState::Preparing:
+            if (text.isEmpty()) text = "Preparing...";
+            item->setForeground(2, QColor("#facc15"));
+            break;
+        case core::JobState::Running:
+            if (text.isEmpty()) text = "Running...";
+            item->setForeground(2, QColor("#38bdf8"));
+            break;
+        case core::JobState::Completed:
+            if (text.isEmpty()) text = "Completed";
+            item->setForeground(2, QColor("#10b981"));
+            break;
+        case core::JobState::Failed:
+            if (text.isEmpty()) text = "Failed";
+            item->setForeground(2, QColor("#ef4444"));
+            break;
+        case core::JobState::Cancelled:
+            if (text.isEmpty()) text = "Cancelled";
+            item->setForeground(2, QColor("#71717a"));
+            break;
+    }
+    item->setText(2, text);
 }
 
 void QueueViewWidget::onJobFinished(const QString& /*jobId*/, core::JobState /*state*/) {

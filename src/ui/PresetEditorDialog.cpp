@@ -77,6 +77,16 @@ void PresetEditorDialog::setupUi() {
     m_crfSpin->setValue(23);
     videoForm->addRow("CRF Rate Control (0-51):", m_crfSpin);
 
+    m_speedCombo = new QComboBox(this);
+    m_speedCombo->addItem("Ultrafast", 0);
+    m_speedCombo->addItem("Fast", 1);
+    m_speedCombo->addItem("Medium", 2);
+    m_speedCombo->addItem("Slow", 3);
+    m_speedCombo->addItem("Slower", 4);
+    m_speedCombo->addItem("Very Slow", 5);
+    m_speedCombo->setCurrentIndex(2);
+    videoForm->addRow("Encoding Speed / Preset:", m_speedCombo);
+
     m_videoBitrateSpin = new QSpinBox(this);
     m_videoBitrateSpin->setRange(0, 100000);
     m_videoBitrateSpin->setSuffix(" kbps (0 = auto/crf)");
@@ -111,6 +121,10 @@ void PresetEditorDialog::setupUi() {
     m_autoOrientCheck = new QCheckBox("Auto-Orient based on EXIF tag", this);
     m_autoOrientCheck->setChecked(true);
     imgForm->addRow("", m_autoOrientCheck);
+
+    m_preserveAspectRatioCheck = new QCheckBox("Preserve Aspect Ratio", this);
+    m_preserveAspectRatioCheck->setChecked(true);
+    imgForm->addRow("", m_preserveAspectRatioCheck);
 
     mainLayout->addWidget(m_imageOptionsWidget);
 
@@ -149,6 +163,7 @@ void PresetEditorDialog::loadFromPreset(const core::ConversionPreset& p) {
     m_nameEdit->setText(p.name);
     m_descEdit->setText(p.description);
     m_targetFormatEdit->setText(p.targetFormatId);
+    m_existingOptions = p.options;
 
     const int idx = m_sourceCatCombo->findData(static_cast<int>(p.sourceCategory));
     if (idx >= 0) m_sourceCatCombo->setCurrentIndex(idx);
@@ -156,6 +171,7 @@ void PresetEditorDialog::loadFromPreset(const core::ConversionPreset& p) {
     // Extract options
     if (p.options.contains("customVideoCodec")) m_videoCodecEdit->setText(p.options["customVideoCodec"].toString());
     if (p.options.contains("crf")) m_crfSpin->setValue(p.options["crf"].toInt());
+    if (p.options.contains("preset")) m_speedCombo->setCurrentIndex(qBound(0, p.options["preset"].toInt(), 5));
     if (p.options.contains("customVideoBitrateKbps")) m_videoBitrateSpin->setValue(p.options["customVideoBitrateKbps"].toInt());
     if (p.options.contains("customAudioCodec")) m_audioCodecEdit->setText(p.options["customAudioCodec"].toString());
     if (p.options.contains("customAudioBitrateKbps")) m_audioBitrateSpin->setValue(p.options["customAudioBitrateKbps"].toInt());
@@ -163,6 +179,7 @@ void PresetEditorDialog::loadFromPreset(const core::ConversionPreset& p) {
     if (p.options.contains("quality")) m_qualitySpin->setValue(p.options["quality"].toInt());
     if (p.options.contains("stripMetadata")) m_stripMetadataCheck->setChecked(p.options["stripMetadata"].toBool());
     if (p.options.contains("autoOrient")) m_autoOrientCheck->setChecked(p.options["autoOrient"].toBool());
+    if (p.options.contains("preserveAspectRatio")) m_preserveAspectRatioCheck->setChecked(p.options["preserveAspectRatio"].toBool());
 }
 
 core::ConversionPreset PresetEditorDialog::preset() const {
@@ -175,10 +192,11 @@ core::ConversionPreset PresetEditorDialog::preset() const {
     p.targetFormatId = m_targetFormatEdit->text().trimmed().toLower();
     p.isBuiltIn = false;
 
-    QVariantMap opts;
+    QVariantMap opts = m_existingOptions;
     if (p.sourceCategory == core::MediaCategory::Video || p.sourceCategory == core::MediaCategory::Audio) {
         if (!m_videoCodecEdit->text().trimmed().isEmpty()) opts["customVideoCodec"] = m_videoCodecEdit->text().trimmed();
         opts["crf"] = m_crfSpin->value();
+        opts["preset"] = m_speedCombo->currentIndex();
         if (m_videoBitrateSpin->value() > 0) opts["customVideoBitrateKbps"] = m_videoBitrateSpin->value();
         if (!m_audioCodecEdit->text().trimmed().isEmpty()) opts["customAudioCodec"] = m_audioCodecEdit->text().trimmed();
         opts["customAudioBitrateKbps"] = m_audioBitrateSpin->value();
@@ -186,6 +204,7 @@ core::ConversionPreset PresetEditorDialog::preset() const {
         opts["quality"] = m_qualitySpin->value();
         opts["stripMetadata"] = m_stripMetadataCheck->isChecked();
         opts["autoOrient"] = m_autoOrientCheck->isChecked();
+        opts["preserveAspectRatio"] = m_preserveAspectRatioCheck->isChecked();
     }
     p.options = opts;
     return p;

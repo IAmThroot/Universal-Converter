@@ -53,11 +53,16 @@ QString FfmpegArgBuilder::selectVideoEncoder(const QString& targetContainer,
     // Check hardware availability if requested
     const bool allowNvenc = (hwMode == HardwareEncoderMode::Auto || hwMode == HardwareEncoderMode::Nvenc);
     const bool allowVaapi = (hwMode == HardwareEncoderMode::Auto || hwMode == HardwareEncoderMode::Vaapi);
+    const bool allowQsv = (hwMode == HardwareEncoderMode::Auto || hwMode == HardwareEncoderMode::Qsv);
 
     if (cnt == "mp4" || cnt == "mkv" || cnt == "mov" || cnt == "ts" || cnt == "flv" || cnt == "avi") {
         if (allowNvenc && availableHwEncoders.contains("h264_nvenc")) {
             outIsHw = true;
             return "h264_nvenc";
+        }
+        if (allowQsv && availableHwEncoders.contains("h264_qsv")) {
+            outIsHw = true;
+            return "h264_qsv";
         }
         if (allowVaapi && availableHwEncoders.contains("h264_vaapi")) {
             outIsHw = true;
@@ -70,6 +75,14 @@ QString FfmpegArgBuilder::selectVideoEncoder(const QString& targetContainer,
         if (allowNvenc && availableHwEncoders.contains("av1_nvenc")) {
             outIsHw = true;
             return "av1_nvenc";
+        }
+        if (allowQsv && availableHwEncoders.contains("vp9_qsv")) {
+            outIsHw = true;
+            return "vp9_qsv";
+        }
+        if (allowVaapi && availableHwEncoders.contains("vp9_vaapi")) {
+            outIsHw = true;
+            return "vp9_vaapi";
         }
         return "libvpx-vp9";
     }
@@ -87,7 +100,7 @@ QString FfmpegArgBuilder::selectVideoEncoder(const QString& targetContainer,
     }
 
     if (cnt == "3gp" || cnt == "3g2") {
-        return "h263";
+        return "mpeg4";
     }
 
     // Default universal video fallback
@@ -209,10 +222,10 @@ ArgumentBuildResult FfmpegArgBuilder::buildSubtitleArguments(const QString& inpu
 QString FfmpegArgBuilder::selectAudioEncoder(const QString& targetContainer) {
     const QString cnt = targetContainer.toLower();
 
-    if (cnt == "mp3") return "libmp3lame";
+    if (cnt == "mp3" || cnt == "avi") return "libmp3lame";
     if (cnt == "wav") return "pcm_s16le";
     if (cnt == "flac") return "flac";
-    if (cnt == "aac" || cnt == "m4a" || cnt == "m4b" || cnt == "mp4" || cnt == "mov") return "aac";
+    if (cnt == "aac" || cnt == "m4a" || cnt == "m4b" || cnt == "mp4" || cnt == "mov" || cnt == "3gp" || cnt == "3g2") return "aac";
     if (cnt == "ogg" || cnt == "oga" || cnt == "ogv") return "libvorbis";
     if (cnt == "opus" || cnt == "webm") return "libopus";
     if (cnt == "wma") return "wmav2";
@@ -224,14 +237,24 @@ QString FfmpegArgBuilder::selectAudioEncoder(const QString& targetContainer) {
     if (cnt == "au") return "pcm_s16be";
     if (cnt == "voc") return "pcm_u8";
     if (cnt == "wv") return "wavpack";
-    if (cnt == "3gp" || cnt == "3g2") return "amr_nb";
 
     return "aac";
 }
 
+static QString findVaapiDevice() {
+    if (QFile::exists("/dev/dri/renderD128")) {
+        return "/dev/dri/renderD128";
+    }
+    if (QFile::exists("/dev/dri/card0")) {
+        return "/dev/dri/card0";
+    }
+    return QString();
+}
+
 QStringList FfmpegArgBuilder::buildSpeedAndBitrateArgs(const QString& encoder,
                                                        ConversionPreset preset,
-                                                       int videoBitrateKbps)
+                                                       int videoBitrateKbps,
+                                                       int crf)
 {
     QStringList args;
     const int level = static_cast<int>(preset);
@@ -242,7 +265,8 @@ QStringList FfmpegArgBuilder::buildSpeedAndBitrateArgs(const QString& encoder,
         if (videoBitrateKbps > 0) {
             args << "-b:v" << QString("%1k").arg(videoBitrateKbps);
         } else {
-            args << "-crf" << (encoder == "libx264" ? "23" : "28");
+            const int defaultCrf = (encoder == "libx264" ? 23 : 28);
+            args << "-crf" << QString::number(crf >= 0 ? crf : defaultCrf);
         }
     } else if (encoder == "h264_nvenc" || encoder == "hevc_nvenc" || encoder == "av1_nvenc") {
         const QStringList pNames = {"p1", "p2", "p4", "p5", "p6", "p7"};
@@ -250,7 +274,24 @@ QStringList FfmpegArgBuilder::buildSpeedAndBitrateArgs(const QString& encoder,
         if (videoBitrateKbps > 0) {
             args << "-b:v" << QString("%1k").arg(videoBitrateKbps);
         } else {
-            args << "-cq" << "24";
+            const int defaultCq = 24;
+            args << "-cq" << QString::number(crf >= 0 ? crf : defaultCq);
+        }
+    } else if (encoder == "h264_vaapi" || encoder == "hevc_vaapi" || encoder == "vp9_vaapi") {
+        if (videoBitrateKbps > 0) {
+            args << "-b:v" << QString("%1k").arg(videoBitrateKbps);
+        } else {
+            const int defaultQp = (encoder == "h264_vaapi" ? 24 : 26);
+            args << "-qp" << QString::number(crf >= 0 ? crf : defaultQp);
+        }
+    } else if (encoder == "h264_qsv" || encoder == "hevc_qsv" || encoder == "vp9_qsv") {
+        const QStringList pNames = {"veryfast", "faster", "fast", "medium", "slow", "slower"};
+        args << "-preset" << pNames.value(qBound(0, level, 5));
+        if (videoBitrateKbps > 0) {
+            args << "-b:v" << QString("%1k").arg(videoBitrateKbps);
+        } else {
+            const int defaultQuality = 24;
+            args << "-global_quality" << QString::number(crf >= 0 ? crf : defaultQuality);
         }
     } else if (encoder == "libvpx" || encoder == "libvpx-vp9") {
         const QStringList cpuUsed = {"8", "6", "4", "2", "1", "0"};
@@ -258,7 +299,8 @@ QStringList FfmpegArgBuilder::buildSpeedAndBitrateArgs(const QString& encoder,
         if (videoBitrateKbps > 0) {
             args << "-b:v" << QString("%1k").arg(videoBitrateKbps);
         } else {
-            args << "-crf" << "32" << "-b:v" << "0";
+            const int defaultCrf = 32;
+            args << "-crf" << QString::number(crf >= 0 ? crf : defaultCrf) << "-b:v" << "0";
         }
     } else if (encoder == "libsvtav1") {
         const QStringList pNames = {"12", "10", "8", "6", "4", "2"};
@@ -266,7 +308,8 @@ QStringList FfmpegArgBuilder::buildSpeedAndBitrateArgs(const QString& encoder,
         if (videoBitrateKbps > 0) {
             args << "-b:v" << QString("%1k").arg(videoBitrateKbps);
         } else {
-            args << "-crf" << "30";
+            const int defaultCrf = 30;
+            args << "-crf" << QString::number(crf >= 0 ? crf : defaultCrf);
         }
     } else {
         if (videoBitrateKbps > 0) {
@@ -299,9 +342,31 @@ ArgumentBuildResult FfmpegArgBuilder::buildArguments(const QString& inputPath,
 
     // Determine workflow: Is output an audio format or a video format?
     const bool isTargetAudioOnly = isAudioContainer(targetContainer);
+    const bool isAnimatedImage = (targetContainer == "gif" || targetContainer == "webp" || targetContainer == "avif");
+
+    QString videoEncoder;
+    bool isHw = false;
+    if (!isTargetAudioOnly && probe.hasVideo() && !isAnimatedImage) {
+        videoEncoder = options.customVideoCodec.isEmpty() ?
+                           selectVideoEncoder(targetContainer, options.hwMode, availableHwEncoders, isHw) :
+                           options.customVideoCodec;
+        if (videoEncoder.contains("nvenc") || videoEncoder.contains("vaapi") || videoEncoder.contains("qsv")) {
+            isHw = true;
+        }
+    }
 
     QStringList args;
     args << "-hide_banner" << "-y";
+
+    // Hardware device initialization (before inputs)
+    if (videoEncoder.contains("vaapi")) {
+        const QString vaapiDev = !options.hwDevice.isEmpty() ? options.hwDevice : findVaapiDevice();
+        if (!vaapiDev.isEmpty()) {
+            args << "-vaapi_device" << vaapiDev;
+        }
+    } else if (videoEncoder.contains("qsv")) {
+        args << "-init_hw_device" << "qsv=hw" << "-filter_hw_device" << "hw";
+    }
 
     // Progress reporting over stdout pipe
     args << "-progress" << "pipe:1";
@@ -372,7 +437,7 @@ ArgumentBuildResult FfmpegArgBuilder::buildArguments(const QString& inputPath,
             } else if (targetContainer == "avif") {
                 result.chosenVideoCodec = "libsvtav1";
                 args << "-c:v" << "libsvtav1";
-                args << "-crf" << "30";
+                args << "-crf" << QString::number(options.crf >= 0 ? options.crf : 30);
                 if (options.customFps > 0) {
                     args << "-r" << QString::number(options.customFps);
                 }
@@ -382,25 +447,39 @@ ArgumentBuildResult FfmpegArgBuilder::buildArguments(const QString& inputPath,
                 // Strip audio for animated avif
                 args << "-an";
             } else {
-                bool isHw = false;
-                const QString videoEncoder = options.customVideoCodec.isEmpty() ?
-                                                 selectVideoEncoder(targetContainer, options.hwMode, availableHwEncoders, isHw) :
-                                                 options.customVideoCodec;
                 result.chosenVideoCodec = videoEncoder;
                 result.isHardwareAccelerated = isHw;
 
                 args << "-c:v" << videoEncoder;
 
-                // Pixel format standardization (yuv420p is universally supported by NVENC, VAAPI, VP9, and x264)
-                args << "-pix_fmt" << "yuv420p";
-
-                // Speed and bitrate
-                args.append(buildSpeedAndBitrateArgs(videoEncoder, options.preset, options.customVideoBitrateKbps));
-
-                // Resolution / scaling
-                if (options.customWidth > 0 && options.customHeight > 0) {
-                    args << "-vf" << QString("scale=%1:%2").arg(options.customWidth).arg(options.customHeight);
+                // Hardware surface upload filter chains vs software pixel format
+                if (videoEncoder.contains("vaapi")) {
+                    QString filterChain;
+                    if (options.customWidth > 0 && options.customHeight > 0) {
+                        filterChain = QString("scale=%1:%2,format=nv12,hwupload").arg(options.customWidth).arg(options.customHeight);
+                    } else {
+                        filterChain = "format=nv12,hwupload";
+                    }
+                    args << "-vf" << filterChain;
+                } else if (videoEncoder.contains("qsv")) {
+                    QString filterChain;
+                    if (options.customWidth > 0 && options.customHeight > 0) {
+                        filterChain = QString("scale=%1:%2,hwupload=extra_hw_frames=64,format=qsv").arg(options.customWidth).arg(options.customHeight);
+                    } else {
+                        filterChain = "hwupload=extra_hw_frames=64,format=qsv";
+                    }
+                    args << "-vf" << filterChain;
+                } else {
+                    // Software & NVENC path
+                    args << "-pix_fmt" << "yuv420p";
+                    if (options.customWidth > 0 && options.customHeight > 0) {
+                        args << "-vf" << QString("scale=%1:%2").arg(options.customWidth).arg(options.customHeight);
+                    }
                 }
+
+                // Speed and bitrate (respecting user-configured CRF)
+                args.append(buildSpeedAndBitrateArgs(videoEncoder, options.preset, options.customVideoBitrateKbps, options.crf));
+
                 if (options.customFps > 0) {
                     args << "-r" << QString::number(options.customFps);
                 }

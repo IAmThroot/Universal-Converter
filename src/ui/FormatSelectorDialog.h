@@ -32,6 +32,8 @@ private slots:
     void onPresetSelected(int index);
     void onItemSelectionChanged();
     void onNewPresetClicked();
+    void onEditPresetClicked();
+    void onDeletePresetClicked();
 
 private:
     void setupPresetSection(QVBoxLayout* layout);
@@ -46,6 +48,8 @@ private:
     bool m_applyToAllRemaining{false};
 
     QComboBox* m_presetCombo{nullptr};
+    QPushButton* m_editPresetBtn{nullptr};
+    QPushButton* m_deletePresetBtn{nullptr};
     QLabel* m_presetDescLabel{nullptr};
     QLineEdit* m_searchEdit{nullptr};
     QListWidget* m_listWidget{nullptr};

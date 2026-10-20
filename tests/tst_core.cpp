@@ -37,6 +37,8 @@ class CoreTests : public QObject {
     Q_OBJECT
 
 private slots:
+    void initTestCase();
+
     // --- 1. ConversionJob Tests ---
     void testJobStateTransitions();
     void testInvalidJobStateTransitions();
@@ -66,6 +68,7 @@ private slots:
     void testOrchestratorQueueConcurrency();
     void testQueuedJobCancellation();
     void testSlotReleaseAfterCompletion();
+    void testOrchestratorEndToEndExecution();
 
     // --- 6. FFmpeg Engine & Tool Tests (Phase 3) ---
     void testProgressParserIncrementalChunks();
@@ -132,6 +135,10 @@ private slots:
     void testRealVideoToAnimatedConversionsEndToEnd();
 };
 
+void CoreTests::initTestCase() {
+    uc::app::ToolchainManager::instance().scanAll();
+}
+
 void CoreTests::testJobStateTransitions() {
     ConversionJob job("job-1", {"/tmp/test.mp4"}, "mp4", "webm", "/tmp/out");
     QCOMPARE(job.state(), JobState::Queued);
@@ -154,6 +161,13 @@ void CoreTests::testJobStateTransitions() {
     QCOMPARE(job.state(), JobState::Completed);
     QVERIFY(job.isTerminal());
     QVERIFY(job.completedAt().isValid());
+
+    // Test retry transition: Running -> Queued
+    ConversionJob retryJob("job-retry", {"/tmp/test.mp4"}, "mp4", "webm", "/tmp/out");
+    QVERIFY(retryJob.transitionTo(JobState::Preparing));
+    QVERIFY(retryJob.transitionTo(JobState::Running));
+    QVERIFY(retryJob.transitionTo(JobState::Queued, "Retrying transient failure"));
+    QCOMPARE(retryJob.state(), JobState::Queued);
 }
 
 void CoreTests::testInvalidJobStateTransitions() {
@@ -459,9 +473,12 @@ void CoreTests::testQueuedJobCancellation() {
     auto job = std::make_shared<ConversionJob>("j-cancel", QStringList{"/tmp/in.mp4"}, "mp4", "webm", "/tmp");
     orchestrator.addJob(job);
 
+    QSignalSpy finishSpy(&orchestrator, &ConversionOrchestrator::jobFinished);
     orchestrator.cancelJob("j-cancel");
     QCOMPARE(job->state(), JobState::Cancelled);
     QVERIFY(job->isTerminal());
+    QCOMPARE(finishSpy.count(), 1);
+    QCOMPARE(qvariant_cast<JobState>(finishSpy.at(0).at(1)), JobState::Cancelled);
 }
 
 void CoreTests::testSlotReleaseAfterCompletion() {
@@ -472,6 +489,89 @@ void CoreTests::testSlotReleaseAfterCompletion() {
 
     orchestrator.cancelJob("j-slot");
     QCOMPARE(orchestrator.activeJobCount(), 0);
+}
+
+void CoreTests::testOrchestratorEndToEndExecution() {
+    using namespace uc::engines;
+    const auto& tc = uc::app::ToolchainManager::instance();
+    if (!tc.magick().isAvailable && !tc.pandoc().isAvailable && !tc.ffmpeg().isAvailable) {
+        QSKIP("No conversion engine is available on host system.");
+    }
+
+    auto& history = ConversionHistoryManager::instance();
+    history.clearHistory();
+    QCOMPARE(history.records().size(), 0);
+
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+
+    ConversionOrchestrator orchestrator(1); // max concurrency 1 to test queue sequencing
+
+    QSignalSpy finishedSpy(&orchestrator, &ConversionOrchestrator::jobFinished);
+    QSignalSpy drainedSpy(&orchestrator, &ConversionOrchestrator::queueDrained);
+
+    std::shared_ptr<ConversionJob> job1;
+    std::shared_ptr<ConversionJob> job2;
+
+    if (tc.magick().isAvailable) {
+        auto magickEngine = std::make_shared<ImageMagickEngine>();
+        orchestrator.setImageMagickEngine(magickEngine);
+
+        const QString src1 = tempDir.filePath("in1.bmp");
+        const QString src2 = tempDir.filePath("in2.bmp");
+        QImage img(40, 40, QImage::Format_RGB32);
+        img.fill(Qt::blue);
+        QVERIFY(img.save(src1, "BMP"));
+        img.fill(Qt::yellow);
+        QVERIFY(img.save(src2, "BMP"));
+
+        const QString out1 = tempDir.filePath("out1.png");
+        const QString out2 = tempDir.filePath("out2.png");
+
+        job1 = std::make_shared<ConversionJob>("job-e2e-1", QStringList{src1}, "bmp", "png", tempDir.path(), EngineType::ImageMagick);
+        job1->setFinalOutputPath(out1);
+
+        job2 = std::make_shared<ConversionJob>("job-e2e-2", QStringList{src2}, "bmp", "png", tempDir.path(), EngineType::ImageMagick);
+        job2->setFinalOutputPath(out2);
+    } else if (tc.pandoc().isAvailable) {
+        auto pandocEngine = std::make_shared<PandocEngine>();
+        orchestrator.setPandocEngine(pandocEngine);
+
+        const QString src1 = tempDir.filePath("in1.md");
+        const QString src2 = tempDir.filePath("in2.md");
+        QFile f1(src1);
+        QVERIFY(f1.open(QFile::WriteOnly));
+        f1.write("# Doc 1\n");
+        f1.close();
+        QFile f2(src2);
+        QVERIFY(f2.open(QFile::WriteOnly));
+        f2.write("# Doc 2\n");
+        f2.close();
+
+        const QString out1 = tempDir.filePath("out1.html");
+        const QString out2 = tempDir.filePath("out2.html");
+
+        job1 = std::make_shared<ConversionJob>("job-e2e-1", QStringList{src1}, "md", "html", tempDir.path(), EngineType::Pandoc);
+        job1->setFinalOutputPath(out1);
+
+        job2 = std::make_shared<ConversionJob>("job-e2e-2", QStringList{src2}, "md", "html", tempDir.path(), EngineType::Pandoc);
+        job2->setFinalOutputPath(out2);
+    }
+
+    orchestrator.addJob(job1);
+    orchestrator.addJob(job2);
+
+    // Wait for both jobs to finish through queue sequencing
+    QTRY_COMPARE_WITH_TIMEOUT(finishedSpy.count(), 2, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(drainedSpy.count(), 1, 5000);
+
+    QCOMPARE(job1->state(), JobState::Completed);
+    QCOMPARE(job2->state(), JobState::Completed);
+    QVERIFY(QFile::exists(job1->finalOutputPath()));
+    QVERIFY(QFile::exists(job2->finalOutputPath()));
+
+    QCOMPARE(history.records().size(), 2);
+    history.clearHistory();
 }
 
 void CoreTests::testProgressParserIncrementalChunks() {
@@ -580,6 +680,44 @@ void CoreTests::testArgBuilderHardwareAccelerationMode() {
     QVERIFY(resNvenc.isValid);
     QCOMPARE(resNvenc.chosenVideoCodec, "h264_nvenc");
     QVERIFY(resNvenc.isHardwareAccelerated);
+
+    // Simulate available VA-API
+    auto resVaapi = FfmpegArgBuilder::buildArguments("/in/a.mkv", "/out/b.mp4", probe, opts, {"h264_vaapi"});
+    QVERIFY(resVaapi.isValid);
+    QCOMPARE(resVaapi.chosenVideoCodec, "h264_vaapi");
+    QVERIFY(resVaapi.isHardwareAccelerated);
+    QVERIFY(resVaapi.arguments.contains("format=nv12,hwupload"));
+    QVERIFY(!resVaapi.arguments.contains("yuv420p"));
+
+    // Simulate available QSV
+    auto resQsv = FfmpegArgBuilder::buildArguments("/in/a.mkv", "/out/b.mp4", probe, opts, {"h264_qsv"});
+    QVERIFY(resQsv.isValid);
+    QCOMPARE(resQsv.chosenVideoCodec, "h264_qsv");
+    QVERIFY(resQsv.isHardwareAccelerated);
+    QVERIFY(resQsv.arguments.contains("-init_hw_device"));
+    QVERIFY(!resQsv.arguments.contains("yuv420p"));
+
+    // Test custom CRF propagation
+    FfmpegConversionOptions optsCrf;
+    optsCrf.targetFormatId = "mp4";
+    optsCrf.crf = 19;
+    auto resCrf = FfmpegArgBuilder::buildArguments("/in/a.mkv", "/out/b.mp4", probe, optsCrf, {});
+    QVERIFY(resCrf.isValid);
+    const int crfIdx = resCrf.arguments.indexOf("-crf");
+    QVERIFY(crfIdx >= 0 && crfIdx + 1 < resCrf.arguments.size());
+    QCOMPARE(resCrf.arguments[crfIdx + 1], "19");
+
+    // Test AVI audio encoder selection (must be libmp3lame, not aac)
+    QCOMPARE(FfmpegArgBuilder::selectAudioEncoder("avi"), "libmp3lame");
+    MediaProbeResult probeAudio = probe;
+    MediaStreamInfo aStream;
+    aStream.codecType = "audio";
+    probeAudio.streams.append(aStream);
+    FfmpegConversionOptions optsAvi;
+    optsAvi.targetFormatId = "avi";
+    auto resAvi = FfmpegArgBuilder::buildArguments("/in/a.mkv", "/out/b.avi", probeAudio, optsAvi, {});
+    QVERIFY(resAvi.isValid);
+    QCOMPARE(resAvi.chosenAudioCodec, "libmp3lame");
 
     // Simulate no hardware encoders available
     auto resCpu = FfmpegArgBuilder::buildArguments("/in/a.mkv", "/out/b.mp4", probe, opts, {});

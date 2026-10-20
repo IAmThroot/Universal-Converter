@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-brightgreen.svg)](https://en.cppreference.com/w/cpp/20)
 [![Qt 6](https://img.shields.io/badge/Qt-6.5%2B-green.svg)](https://www.qt.io/)
-[![Version: 1.1.0](https://img.shields.io/badge/Release-v1.1.0-emerald.svg)](https://github.com/IAmThroot/Universal-Converter/releases/tag/v1.1.0)
+[![Version: 1.1.5](https://img.shields.io/badge/Release-v1.1.5-emerald.svg)](https://github.com/IAmThroot/Universal-Converter/releases/tag/v1.1.5)
 
 A high-performance, completely offline, native **C++20 / Qt 6** desktop application for converting audio, video, images, subtitles, and documents across formats without web runtimes, Electron, localhost daemons, or remote API dependencies.
 
@@ -93,8 +93,8 @@ Download the latest pre-built binaries directly from the [GitHub Releases](https
     - **Fedora**: `sudo dnf install ffmpeg ImageMagick`
 
 - **Windows (x64)**:
-  - 💾 **Download `UniversalConverter-1.1.0-win64.exe`** (NSIS setup wizard with desktop shortcuts and uninstaller)
-  - 🗜️ **Download `UniversalConverter-1.1.0-win64.zip`** (Portable package: extract and run `UniversalConverter.exe`)
+  - 💾 **Download `UniversalConverter-1.1.5-win64.exe`** (NSIS setup wizard with desktop shortcuts and uninstaller)
+  - 🗜️ **Download `UniversalConverter-1.1.5-win64.zip`** (Portable package: extract and run `UniversalConverter.exe`)
   - **Prerequisites for Media/Image conversions**:
     - Install via Windows Package Manager (`winget` in Terminal / PowerShell):
       ```powershell

@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QUuid>
 #include <QSet>
+#include <QThreadPool>
 
 namespace uc::engines {
 
@@ -80,17 +81,7 @@ bool FfmpegEngine::executeJob(std::shared_ptr<core::ConversionJob> job) {
     const bool isSubJob = FfmpegArgBuilder::isSubtitleContainer(job->inputFormatId()) &&
                           FfmpegArgBuilder::isSubtitleContainer(targetFormat);
 
-    // 1. Probe input media with FFprobe (only for video/audio streams)
-    MediaProbeResult probe;
-    if (!isSubJob && ffprobeInfo.isAvailable) {
-        probe = MediaProbe::probeFile(ffprobeInfo.executablePath, inputPath);
-        if (!probe.isValid) {
-            job->setError(QString("Failed to probe input file: %1").arg(probe.errorMessage));
-            return false;
-        }
-    }
-
-    // 2. Prepare temporary output path in destination directory
+    // 1. Prepare temporary output path in destination directory
     const QString finalOut = job->finalOutputPath();
     if (finalOut.trimmed().isEmpty()) {
         job->setError("Output path is empty; job was not planned correctly.");
@@ -102,33 +93,10 @@ bool FfmpegEngine::executeJob(std::shared_ptr<core::ConversionJob> job) {
         return false;
     }
 
-    ArgumentBuildResult argResult;
-    if (isSubJob) {
-        argResult = FfmpegArgBuilder::buildSubtitleArguments(inputPath, tempOut, targetFormat);
-    } else {
-        // 3. Hardware acceleration & options
-        const auto sysCaps = core::SystemInfo::probe();
-        const auto& settings = app::AppSettings::instance();
-
-        FfmpegConversionOptions options;
-        options.targetFormatId = targetFormat;
-        options.hwMode = settings.hardwareAccelerationEnabled() ?
-                             HardwareEncoderMode::Auto : HardwareEncoderMode::Disabled;
-
-        argResult = FfmpegArgBuilder::buildArguments(
-            inputPath, tempOut, probe, options, sysCaps.availableHwEncoders);
-    }
-
-    if (!argResult.isValid) {
-        job->setError(argResult.errorMessage);
-        return false;
-    }
-
-    // 4. Create running context
+    // 2. Create running context
     auto ctx = std::make_shared<RunningContext>();
     ctx->job = job;
     ctx->runner = std::make_shared<core::ProcessRunner>(this);
-    ctx->parser = std::make_unique<FfmpegProgressParser>(probe.durationSeconds);
     ctx->tempOutputPath = tempOut;
     ctx->finalOutputPath = finalOut;
 
@@ -145,25 +113,102 @@ bool FfmpegEngine::executeJob(std::shared_ptr<core::ConversionJob> job) {
                 onProcessFinished(id, res);
             });
 
-    // 5. Start conversion
     if (job->state() == core::JobState::Queued) {
-        job->transitionTo(core::JobState::Preparing);
+        job->transitionTo(core::JobState::Preparing, "Analyzing media stream...");
     }
 
-    job->transitionTo(core::JobState::Running,
-                      QString("Converting with %1 (%2)...")
-                          .arg(argResult.chosenVideoCodec.isEmpty() ? argResult.chosenAudioCodec : argResult.chosenVideoCodec,
-                               argResult.isHardwareAccelerated ? "GPU NVENC" : "CPU"));
+    // 3. Offload probe and argument preparation to worker thread
+    const QString ffprobePath = ffprobeInfo.executablePath;
+    const QString ffmpegPath = ffmpegInfo.executablePath;
 
-    job->setExecutedCommand(QString("%1 %2").arg(ffmpegInfo.executablePath, argResult.arguments.join(' ')));
+    QThreadPool::globalInstance()->start([this, ctx, job, isSubJob, inputPath, tempOut, targetFormat, ffprobePath, ffmpegPath]() {
+        if (ctx->isCancelled) {
+            QFile::remove(tempOut);
+            return;
+        }
 
-    const bool started = ctx->runner->start(ffmpegInfo.executablePath, argResult.arguments);
-    if (!started) {
-        QFile::remove(tempOut);
-        m_activeContexts.remove(job->id());
-        job->setError("Failed to launch FFmpeg child process.");
-        return false;
-    }
+        MediaProbeResult probe;
+        if (!isSubJob && !ffprobePath.isEmpty()) {
+            probe = MediaProbe::probeFile(ffprobePath, inputPath);
+            if (!probe.isValid) {
+                QMetaObject::invokeMethod(this, [this, ctx, job, errMsg = probe.errorMessage]() {
+                    if (ctx->isCancelled) return;
+                    job->setError(QString("Failed to probe input file: %1").arg(errMsg));
+                    m_activeContexts.remove(job->id());
+                    emit jobFinished(job->id(), false, job->errorMessage());
+                }, Qt::QueuedConnection);
+                return;
+            }
+        }
+
+        if (ctx->isCancelled) {
+            QFile::remove(tempOut);
+            return;
+        }
+
+        ArgumentBuildResult argResult;
+        if (isSubJob) {
+            argResult = FfmpegArgBuilder::buildSubtitleArguments(inputPath, tempOut, targetFormat);
+        } else {
+            const auto sysCaps = core::SystemInfo::probe();
+            const auto& settings = app::AppSettings::instance();
+
+            FfmpegConversionOptions options;
+            options.targetFormatId = targetFormat;
+            options.hwMode = settings.hardwareAccelerationEnabled() ?
+                                 HardwareEncoderMode::Auto : HardwareEncoderMode::Disabled;
+
+            const auto opts = job->options();
+            if (opts.contains("customVideoCodec")) options.customVideoCodec = opts["customVideoCodec"].toString();
+            if (opts.contains("customVideoBitrateKbps")) options.customVideoBitrateKbps = opts["customVideoBitrateKbps"].toInt();
+            if (opts.contains("customAudioCodec")) options.customAudioCodec = opts["customAudioCodec"].toString();
+            if (opts.contains("customAudioBitrateKbps")) options.customAudioBitrateKbps = opts["customAudioBitrateKbps"].toInt();
+            if (opts.contains("customAudioSampleRate")) options.customAudioSampleRate = opts["customAudioSampleRate"].toInt();
+            if (opts.contains("customAudioChannels")) options.customAudioChannels = opts["customAudioChannels"].toInt();
+            if (opts.contains("customWidth")) options.customWidth = opts["customWidth"].toInt();
+            if (opts.contains("customHeight")) options.customHeight = opts["customHeight"].toInt();
+            if (opts.contains("customFps")) options.customFps = opts["customFps"].toInt();
+            if (opts.contains("crf")) options.crf = opts["crf"].toInt();
+            if (opts.contains("preset")) options.preset = static_cast<ConversionPreset>(opts["preset"].toInt());
+            if (opts.contains("stripMetadata")) options.stripMetadata = opts["stripMetadata"].toBool();
+
+            argResult = FfmpegArgBuilder::buildArguments(
+                inputPath, tempOut, probe, options, sysCaps.availableHwEncoders);
+        }
+
+        if (!argResult.isValid) {
+            QMetaObject::invokeMethod(this, [this, ctx, job, errMsg = argResult.errorMessage]() {
+                if (ctx->isCancelled) return;
+                job->setError(errMsg);
+                m_activeContexts.remove(job->id());
+                emit jobFinished(job->id(), false, errMsg);
+            }, Qt::QueuedConnection);
+            return;
+        }
+
+        QMetaObject::invokeMethod(this, [this, ctx, job, ffmpegPath, argResult, duration = probe.durationSeconds, targetFormat]() {
+            if (ctx->isCancelled) {
+                QFile::remove(ctx->tempOutputPath);
+                m_activeContexts.remove(job->id());
+                return;
+            }
+
+            ctx->parser = std::make_unique<FfmpegProgressParser>(duration);
+            job->transitionTo(core::JobState::Running,
+                              QString("Converting with %1 (%2)...")
+                                  .arg(argResult.chosenVideoCodec.isEmpty() ? argResult.chosenAudioCodec : argResult.chosenVideoCodec,
+                                       argResult.isHardwareAccelerated ? "Hardware" : "CPU"));
+            job->setExecutedCommand(QString("%1 %2").arg(ffmpegPath, argResult.arguments.join(' ')));
+
+            const bool started = ctx->runner->start(ffmpegPath, argResult.arguments);
+            if (!started) {
+                QFile::remove(ctx->tempOutputPath);
+                m_activeContexts.remove(job->id());
+                job->setError("Failed to launch FFmpeg child process.");
+                emit jobFinished(job->id(), false, "Failed to launch FFmpeg process.");
+            }
+        }, Qt::QueuedConnection);
+    });
 
     return true;
 }

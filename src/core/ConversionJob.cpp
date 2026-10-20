@@ -71,7 +71,8 @@ bool ConversionJob::isValidTransition(JobState from, JobState to) const {
                    to == JobState::Queued;
 
         case JobState::Running:
-            return to == JobState::Completed || to == JobState::Failed || to == JobState::Cancelled;
+            return to == JobState::Completed || to == JobState::Failed || to == JobState::Cancelled ||
+                   to == JobState::Queued;
 
         default:
             return false;
@@ -94,6 +95,10 @@ bool ConversionJob::transitionTo(JobState newState, const QString& message) {
         m_statusMessage = message;
     } else {
         m_statusMessage = jobStateToString(newState);
+    }
+
+    if (newState == JobState::Queued || newState == JobState::Preparing) {
+        m_finishedHandled = false;
     }
 
     if (newState == JobState::Running && !m_startedAt.isValid()) {

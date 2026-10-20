@@ -5,6 +5,28 @@ All notable changes to Universal Converter will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.5] - 2026-10-20
+
+### Added
+- **Hardware Acceleration Pipelines**: Full, verified implementation of Intel/AMD VA-API (`h264_vaapi`, `hevc_vaapi`, `vp9_vaapi`) and Intel QSV (`h264_qsv`, `hevc_qsv`, `vp9_qsv`) pipelines with explicit hardware device (`-vaapi_device /dev/dri/renderD128`) and `format=nv12,hwupload` filter insertion.
+- **End-to-End Orchestrator Integration Tests**: Added automated integration test suite validating queue serialization, completion transitions, signal firing, and history persistence through `ConversionOrchestrator`.
+- **Live Progress & State Tracking in UI**: Wired `jobProgressChanged` and `jobStateChanged` across `ConversionOrchestrator` and `QueueViewWidget` for real-time percentages, progress bars, and status updates.
+- **Custom Preset Builder Speed & Aspect Controls**: Added encoder speed presets (`ultrafast`, `fast`, `medium`, `slow`, `slower`, `veryslow`) and `preserveAspectRatio` toggle to `PresetEditorDialog`, preserving user parameters on save.
+- **Recursive Watch Folder Scanning**: Added recursive directory descent (`isRecursive`) using `QDirIterator` and full reconciliation for runtime addition, update, removal, and enable/disable of watch folders.
+
+### Fixed
+- **Job Lifecycle & Completion Reliability**: Resolved completion handling issue where finished terminal jobs were prematurely intercepted by guards, ensuring history recording, `jobFinished` emissions, and queue pumping execute reliably.
+- **Engine Cancellation Signal Fidelity**: Fixed `jobFinished` emitting `Failed` on cancellation; cancellations now accurately carry `JobState::Cancelled`.
+- **GUI Thread Responsiveness**: Completely eliminated main-thread blocking by offloading media stream probing (`MediaProbe`), SVG vector rendering (`VectorPipeline`), image inspection (`ImageInspector`), and image optimization passes (`ImageOptimizer`) to background worker thread pools.
+- **Startup Toolchain Scan Gate**: Fixed startup race where immediate drag-and-drop before background toolchain resolution failed with missing executable errors; queue now cleanly defers launching until discovery completes.
+- **Watch Folder Re-Conversion Under KeepOriginal**: Transitioned processed file tracking to a path-to-mtime map; memory bounds pruning now only purges files that no longer exist on disk.
+- **Thread Safety in Toolchain Discovery**: Fixed cross-thread access on `AppSettings` during async scans by snapshotting path overrides on the calling thread.
+- **TOCTOU Output Path Preservation**: Fixed race window in `OutputPathPlanner` by maintaining thread-safe path reservations across planning, backup sidecar creation, and publishing.
+- **Atomic Serialized History Persistence**: Isolated history persistence to a dedicated single-threaded writer pool (`m_writerPool`), preventing out-of-order writes or concurrency between async and sync writes.
+- **Format Selector Option Bleed**: Fixed preset options persisting across target format switches; changing target format now resets stale options.
+- **Container/Codec Alignments**: Defaulted AVI audio codec to `libmp3lame`, 3GP to `mpeg4`, and restricted CRF parameters to supported codecs.
+- **Thread Concurrency Defaults**: Bounded default parallel job concurrency to a safe maximum of 4 (range 1–8).
+
 ## [1.1.0] - 2026-10-16
 
 ### Added

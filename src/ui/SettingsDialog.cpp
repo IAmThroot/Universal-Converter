@@ -234,7 +234,7 @@ void SettingsDialog::onSaveClicked() {
     s.setPandocPathOverride(m_pandocEdit->text().trimmed());
 
     s.sync();
-    app::ToolchainManager::instance().scanAll();
+    app::ToolchainManager::instance().scanAllAsync();
     accept();
 }
 

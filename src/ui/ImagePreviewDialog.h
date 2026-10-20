@@ -37,6 +37,7 @@ private:
     QLabel* m_qualityValueLabel{nullptr};
 
     QImage m_sourceImage;
+    QImage m_previewBaseImage;
     qint64 m_sourceSizeBytes{0};
 };
 

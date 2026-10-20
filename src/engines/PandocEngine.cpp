@@ -21,32 +21,26 @@ bool PandocEngine::canConvert(const QString& inputFormatId, const QString& outpu
     const auto* outDef = registry.findById(out);
     if (inDef && outDef) {
         const auto compat = registry.checkCompatibility(in, out);
-        if (compat.isSupported && compat.responsibleEngine == "Pandoc") {
-            return true;
-        }
-        return false;
+        return compat.isSupported && compat.responsibleEngine == "Pandoc";
     }
-    if (!inDef || !outDef) {
-        // Unknown to registry: fall back to live capability probing.
-        const auto& caps = PandocCapabilities::instance();
-        if (!caps.isDiscovered()) {
-            const auto& tc = app::ToolchainManager::instance();
-            if (tc.pandoc().isAvailable) {
-                PandocCapabilities::instance().discover(tc.pandoc().executablePath);
-            }
+
+    // Unknown to registry: fall back to live capability probing.
+    const auto& caps = PandocCapabilities::instance();
+    if (!caps.isDiscovered()) {
+        const auto& tc = app::ToolchainManager::instance();
+        if (tc.pandoc().isAvailable) {
+            PandocCapabilities::instance().discover(tc.pandoc().executablePath);
         }
-        if (caps.isDiscovered()) {
-            return caps.canReadFormat(inputFormatId) && caps.canWriteFormat(outputFormatId);
-        }
-    } else {
-        return false;
+    }
+    if (caps.isDiscovered()) {
+        return caps.canReadFormat(inputFormatId) && caps.canWriteFormat(outputFormatId);
     }
 
     // Default basic document formats if undiscovered
     const QStringList basicIn = {"md", "markdown", "docx", "odt", "html", "htm", "latex", "tex", "rst", "epub"};
     const QStringList basicOut = {"md", "markdown", "docx", "odt", "html", "htm", "latex", "tex", "rst", "epub", "pdf", "rtf", "txt"};
 
-    return basicIn.contains(inputFormatId.toLower()) && basicOut.contains(outputFormatId.toLower());
+    return basicIn.contains(in) && basicOut.contains(out);
 }
 
 bool PandocEngine::executeJob(std::shared_ptr<core::ConversionJob> job) {

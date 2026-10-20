@@ -38,7 +38,7 @@ public:
     QList<ConversionPreset> presetsForCategory(MediaCategory cat) const;
     const ConversionPreset* findById(const QString& id) const;
 
-    void registerCustomPreset(const ConversionPreset& preset);
+    void registerCustomPreset(const ConversionPreset& preset, bool autoSave = true);
     bool removeCustomPreset(const QString& id);
 
     // Profile Export & Import (JSON)

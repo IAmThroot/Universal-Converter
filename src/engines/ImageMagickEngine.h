@@ -37,6 +37,8 @@ private:
         bool isCancelled{false};
     };
 
+    bool startMagickProcess(std::shared_ptr<RunningContext> ctx);
+
     QMap<QString, std::shared_ptr<RunningContext>> m_activeContexts;
 };
 

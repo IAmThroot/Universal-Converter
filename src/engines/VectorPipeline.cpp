@@ -54,7 +54,8 @@ bool VectorPipeline::renderSvgToImageWithQt(const QString& inputPath,
     int targetH = options.height;
 
     // Clamp to a safe upper bound to prevent multi-GB QImage allocations / OOM.
-    constexpr int kMaxRasterDimension = 16384;
+    constexpr int kMaxRasterDimension = 8192;
+    constexpr qint64 kMaxRasterBytes = 128LL * 1024LL * 1024LL; // 128 MiB buffer limit
     if (targetW > kMaxRasterDimension || targetH > kMaxRasterDimension) {
         if (errorMessage) {
             *errorMessage = QString("Requested dimensions %1x%2 exceed maximum %3px.")
@@ -78,6 +79,14 @@ bool VectorPipeline::renderSvgToImageWithQt(const QString& inputPath,
         const QSize scaled = defaultSize.scaled(targetW, targetH, Qt::KeepAspectRatio);
         targetW = scaled.width();
         targetH = scaled.height();
+    }
+
+    if (static_cast<qint64>(targetW) * targetH * 4 > kMaxRasterBytes) {
+        if (errorMessage) {
+            *errorMessage = QString("Requested dimensions %1x%2 exceed memory limit (%3 MiB).")
+                                .arg(targetW).arg(targetH).arg(kMaxRasterBytes / (1024 * 1024));
+        }
+        return false;
     }
 
     QImage image(targetW, targetH, QImage::Format_ARGB32_Premultiplied);

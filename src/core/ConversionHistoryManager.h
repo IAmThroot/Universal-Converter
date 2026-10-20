@@ -5,6 +5,7 @@
 #include <QVariantMap>
 #include <QList>
 #include <QMutex>
+#include <QThreadPool>
 #include "ConversionJob.h"
 
 namespace uc::core {
@@ -40,7 +41,7 @@ public:
     int maxRecords() const { return m_maxRecords; }
     void setMaxRecords(int count);
 
-    void save();
+    void save(bool synchronous = false);
     void load();
 
 private:
@@ -52,6 +53,7 @@ private:
     mutable QMutex m_mutex;
     QList<HistoryRecord> m_records;
     int m_maxRecords{200};
+    QThreadPool m_writerPool;
 };
 
 } // namespace uc::core

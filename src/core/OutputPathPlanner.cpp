@@ -1,14 +1,38 @@
 #include "OutputPathPlanner.h"
 #include "FormatRegistry.h"
 #include <QRegularExpression>
-
 #include <QUuid>
+#include <QMutex>
+#include <QSet>
 
 namespace uc::core {
 
+static QMutex s_reservedMutex;
+static QSet<QString> s_reservedPaths;
+
+void OutputPathPlanner::reservePath(const QString& path) {
+    if (path.isEmpty()) return;
+    QMutexLocker locker(&s_reservedMutex);
+    s_reservedPaths.insert(path);
+}
+
+void OutputPathPlanner::releasePath(const QString& path) {
+    if (path.isEmpty()) return;
+    QMutexLocker locker(&s_reservedMutex);
+    s_reservedPaths.remove(path);
+}
+
+void OutputPathPlanner::clearReservedPaths() {
+    QMutexLocker locker(&s_reservedMutex);
+    s_reservedPaths.clear();
+}
+
 QString OutputPathPlanner::resolveUniquePath(const QString& targetFilePath) {
-    if (!QFile::exists(targetFilePath)) {
-        return targetFilePath;
+    {
+        QMutexLocker locker(&s_reservedMutex);
+        if (!QFile::exists(targetFilePath) && !s_reservedPaths.contains(targetFilePath)) {
+            return targetFilePath;
+        }
     }
 
     const QFileInfo fi(targetFilePath);
@@ -20,7 +44,8 @@ QString OutputPathPlanner::resolveUniquePath(const QString& targetFilePath) {
     for (int counter = 1; counter <= maxDisambiguationAttempts; ++counter) {
         const QString candidate = QString("%1/%2_%3%4")
                                       .arg(dir, baseName, QString::number(counter), ext.isEmpty() ? "" : "." + ext);
-        if (!QFile::exists(candidate)) {
+        QMutexLocker locker(&s_reservedMutex);
+        if (!QFile::exists(candidate) && !s_reservedPaths.contains(candidate)) {
             return candidate;
         }
     }
@@ -134,11 +159,8 @@ PathPlanResult OutputPathPlanner::planOutputPath(const QString& inputFilePath,
         }
         res.finalFilePath = proposedPath;
     } else { // GenerateUniqueName
-        if (isSameAsSource || QFile::exists(proposedPath)) {
-            res.finalFilePath = resolveUniquePath(proposedPath);
-        } else {
-            res.finalFilePath = proposedPath;
-        }
+        res.finalFilePath = resolveUniquePath(proposedPath);
+        reservePath(res.finalFilePath);
     }
 
     res.isValid = true;
@@ -148,42 +170,45 @@ PathPlanResult OutputPathPlanner::planOutputPath(const QString& inputFilePath,
 bool OutputPathPlanner::publishTempToFinal(const QString& tempPath, const QString& finalPath,
                                            QString* errorMessage) {
     if (tempPath.isEmpty() || finalPath.isEmpty()) {
+        releasePath(finalPath);
         if (errorMessage) *errorMessage = "Temporary or final output path is empty.";
         return false;
     }
     if (!QFile::exists(tempPath)) {
+        releasePath(finalPath);
         if (errorMessage) *errorMessage = QString("Temporary file missing: %1").arg(tempPath);
         return false;
     }
-    // Fast path: no existing target — direct rename is atomic on same device.
-    if (!QFile::exists(finalPath)) {
-        if (QFile::rename(tempPath, finalPath)) {
-            return true;
-        }
-        if (errorMessage) {
-            *errorMessage = QString("Failed to move temporary file to final path: %1").arg(finalPath);
-        }
-        return false;
-    }
-    // Existing target: move it aside first so a failed rename never loses data.
+
+    // Target exists or was created concurrently: move it aside first.
     const QString backupPath = finalPath + QString(".bak_%1")
                                    .arg(QUuid::createUuid().toString(QUuid::WithoutBraces).left(8));
-    // Best-effort backup; if backup rename fails (e.g. cross-device), fall back
-    // to removing only after the new file renames successfully is impossible,
-    // so abort instead of deleting user data.
-    if (!QFile::rename(finalPath, backupPath)) {
-        if (errorMessage) {
-            *errorMessage = QString("Failed to back up existing file prior to publish: %1").arg(finalPath);
+    bool hadExisting = false;
+    if (QFile::exists(finalPath)) {
+        hadExisting = true;
+        if (!QFile::rename(finalPath, backupPath)) {
+            releasePath(finalPath);
+            if (errorMessage) {
+                *errorMessage = QString("Failed to back up existing file prior to publish: %1").arg(finalPath);
+            }
+            return false;
         }
-        return false;
     }
+
     if (QFile::rename(tempPath, finalPath)) {
-        QFile::remove(backupPath);
+        if (hadExisting && QFile::exists(backupPath)) {
+            QFile::remove(backupPath);
+        }
+        releasePath(finalPath);
         return true;
     }
+
     // Restore original on failure.
-    QFile::rename(backupPath, finalPath);
+    if (hadExisting && QFile::exists(backupPath)) {
+        QFile::rename(backupPath, finalPath);
+    }
     QFile::remove(tempPath);
+    releasePath(finalPath);
     if (errorMessage) {
         *errorMessage = QString("Failed to move temporary file to final path: %1").arg(finalPath);
     }
