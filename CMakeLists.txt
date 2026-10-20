@@ -155,6 +155,8 @@ set(APP_SOURCES
     src/ui/ImagePreviewDialog.h
     src/ui/QueueViewWidget.cpp
     src/ui/QueueViewWidget.h
+    src/ui/AppIcon.cpp
+    src/ui/AppIcon.h
     src/ui/themes/ThemeManager.cpp
     src/ui/themes/ThemeManager.h
 )

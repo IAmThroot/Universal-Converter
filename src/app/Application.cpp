@@ -1,5 +1,6 @@
 #include "Application.h"
 #include "ToolchainManager.h"
+#include "../ui/AppIcon.h"
 #include "../ui/MainWindow.h"
 #include "../ui/themes/ThemeManager.h"
 
@@ -13,7 +14,7 @@ Application::Application(int& argc, char** argv)
     setOrganizationName("UniversalConverter");
     setOrganizationDomain("universal-converter.local");
     setApplicationVersion("1.1.5");
-    setWindowIcon(QIcon(":/app_icon.png"));
+    setWindowIcon(ui::appIcon());
     setDesktopFileName("universal-converter");
 }
 
@@ -21,7 +22,7 @@ Application::~Application() = default;
 
 bool Application::init() {
     // 1. Set global icon
-    setWindowIcon(QIcon(":/app_icon.png"));
+    setWindowIcon(ui::appIcon());
 
     // 2. Apply dark stylesheet
     ui::themes::ThemeManager::applyVertDarkTheme(this);

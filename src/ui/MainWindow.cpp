@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "AppIcon.h"
 #include "DropZoneWidget.h"
 #include "SettingsDialog.h"
 #include "FormatSelectorDialog.h"
@@ -36,7 +37,7 @@ MainWindow::MainWindow(QWidget* parent)
     syncWatchFolders();
 
     setWindowTitle("Universal Converter");
-    setWindowIcon(QIcon(":/app_icon.png"));
+    setWindowIcon(appIcon());
     resize(980, 700);
     setMinimumSize(720, 520);
 
@@ -88,7 +89,7 @@ void MainWindow::setupUi() {
     auto* brandLayout = new QHBoxLayout();
     brandLayout->setSpacing(10);
     auto* iconLabel = new QLabel(this);
-    iconLabel->setPixmap(QIcon(":/app_icon.png").pixmap(28, 28));
+    iconLabel->setPixmap(appIcon().pixmap(28, 28));
     auto* titleLabel = new QLabel("Universal Converter", this);
     titleLabel->setStyleSheet("font-size: 19px; font-weight: 700; color: #f4f4f5; letter-spacing: -0.3px;");
     brandLayout->addWidget(iconLabel);

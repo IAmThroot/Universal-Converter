@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Universal Converter (small sizes)</title>
+  <desc>Optical-correction variant for 16-32px rendering: heavier strokes and a chunkier arrow so the mark stays legible when small.</desc>
+  <defs>
+    <linearGradient id="ucEmeraldS" gradientUnits="userSpaceOnUse" x1="70" y1="382" x2="450" y2="382">
+      <stop offset="0" stop-color="#6ee7b7"/>
+      <stop offset="0.45" stop-color="#10b981"/>
+      <stop offset="1" stop-color="#047857"/>
+    </linearGradient>
+    <linearGradient id="ucEdgeS" gradientUnits="userSpaceOnUse" x1="40" y1="40" x2="472" y2="472">
+      <stop offset="0" stop-color="#52525b"/>
+      <stop offset="0.5" stop-color="#3f3f46"/>
+      <stop offset="1" stop-color="#27272a"/>
+    </linearGradient>
+    <clipPath id="ucTileS">
+      <rect x="0" y="0" width="512" height="512" rx="116"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#ucTileS)">
+    <rect width="512" height="512" fill="#18181b"/>
+
+    <!-- UC monogram, heavier strokes, larger footprint -->
+    <g fill="none" stroke="#f4f4f5" stroke-width="56" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M 100 96 L 100 204 C 100 244 122 266 154 266 C 186 266 208 244 208 204 L 208 96"/>
+      <path d="M 407.6 127.7 A 74 74 0 1 0 407.6 244.3"/>
+    </g>
+
+    <!-- Conversion arrow, short and chunky -->
+    <g transform="rotate(-7 256 382)">
+      <g stroke="url(#ucEmeraldS)" stroke-width="54" stroke-linecap="round" fill="none">
+        <path d="M 84 382 L 300 382"/>
+      </g>
+      <path d="M 452 382 L 294 320 L 294 444 Z" fill="url(#ucEmeraldS)"/>
+    </g>
+
+    <rect x="1.5" y="1.5" width="509" height="509" rx="114.5" fill="none" stroke="url(#ucEdgeS)" stroke-width="3"/>
+  </g>
+</svg>

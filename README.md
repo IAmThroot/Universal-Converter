@@ -1,5 +1,9 @@
 # Universal Converter
 
+<p align="center">
+  <img src="resources/icons/app_icon_256.png" alt="Universal Converter" width="128">
+</p>
+
 [![Build & Package Universal Converter](https://github.com/IAmThroot/Universal-Converter/actions/workflows/package.yml/badge.svg)](https://github.com/IAmThroot/Universal-Converter/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-brightgreen.svg)](https://en.cppreference.com/w/cpp/20)

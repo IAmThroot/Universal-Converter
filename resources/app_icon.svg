@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Universal Converter</title>
+  <desc>UC monogram with an emerald conversion arrow. Zinc and emerald, matching the Universal Converter dark theme.</desc>
+  <defs>
+    <linearGradient id="ucEmerald" gradientUnits="userSpaceOnUse" x1="70" y1="420" x2="450" y2="360">
+      <stop offset="0" stop-color="#6ee7b7"/>
+      <stop offset="0.45" stop-color="#10b981"/>
+      <stop offset="1" stop-color="#047857"/>
+    </linearGradient>
+    <linearGradient id="ucEdge" gradientUnits="userSpaceOnUse" x1="40" y1="40" x2="472" y2="472">
+      <stop offset="0" stop-color="#52525b"/>
+      <stop offset="0.5" stop-color="#3f3f46"/>
+      <stop offset="1" stop-color="#27272a"/>
+    </linearGradient>
+    <clipPath id="ucTile">
+      <rect x="0" y="0" width="512" height="512" rx="116"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#ucTile)">
+    <rect width="512" height="512" fill="#18181b"/>
+
+    <!-- UC monogram -->
+    <g fill="none" stroke="#f4f4f5" stroke-width="48" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M 108 112 L 108 216 C 108 254 130 276 158 276 C 186 276 208 254 208 216 L 208 112"/>
+      <path d="M 405.6 135.7 A 74 74 0 1 0 405.6 252.3"/>
+    </g>
+
+    <!-- Conversion arrow -->
+    <g transform="rotate(-9 256 390)">
+      <g stroke="url(#ucEmerald)" stroke-width="42" stroke-linecap="round" fill="none">
+        <path d="M 74 390 L 356 390"/>
+      </g>
+      <path d="M 462 390 L 344 332 L 344 448 Z" fill="url(#ucEmerald)"/>
+    </g>
+
+    <rect x="1.5" y="1.5" width="509" height="509" rx="114.5" fill="none" stroke="url(#ucEdge)" stroke-width="3"/>
+  </g>
+</svg>
