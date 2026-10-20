@@ -250,11 +250,22 @@ if(UNIX AND NOT APPLE)
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications
         OPTIONAL
     )
-    install(FILES resources/app_icon.png
-        DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/256x256/apps
-        RENAME universal-converter.png
-        OPTIONAL
-    )
+    foreach(SIZE 16 22 24 32 48 64 128 256 512)
+        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/app_icon_${SIZE}.png")
+            install(FILES resources/icons/app_icon_${SIZE}.png
+                DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/${SIZE}x${SIZE}/apps
+                RENAME universal-converter.png
+                OPTIONAL
+            )
+        endif()
+    endforeach()
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/resources/app_icon.svg")
+        install(FILES resources/app_icon.svg
+            DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps
+            RENAME universal-converter.svg
+            OPTIONAL
+        )
+    endif()
 endif()
 
 # Install bundled engines if present

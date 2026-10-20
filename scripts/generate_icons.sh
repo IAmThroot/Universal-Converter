@@ -47,4 +47,6 @@ magick \
     "$OUT/app_icon_256.png" \
     "$RES/app_icon.ico"
 
+cp "$RES/app_icon.ico" "$RES/windows/app_icon.ico" 2>/dev/null || true
+
 echo "Icon set regenerated in $OUT"

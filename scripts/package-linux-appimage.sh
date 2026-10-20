@@ -105,16 +105,24 @@ if [ -f "${PROJECT_ROOT}/resources/universal-converter.desktop" ]; then
 fi
 
 # Copy or generate icon
-if [ -f "${PROJECT_ROOT}/resources/app_icon.png" ]; then
-    cp "${PROJECT_ROOT}/resources/app_icon.png" "${APPDIR}/usr/share/icons/hicolor/256x256/apps/universal-converter.png"
+for s in 16 22 24 32 48 64 128 256 512; do
+    if [ -f "${PROJECT_ROOT}/resources/icons/app_icon_${s}.png" ]; then
+        mkdir -p "${APPDIR}/usr/share/icons/hicolor/${s}x${s}/apps"
+        cp "${PROJECT_ROOT}/resources/icons/app_icon_${s}.png" "${APPDIR}/usr/share/icons/hicolor/${s}x${s}/apps/universal-converter.png"
+    fi
+done
+
+if [ -f "${PROJECT_ROOT}/resources/app_icon.svg" ]; then
+    mkdir -p "${APPDIR}/usr/share/icons/hicolor/scalable/apps"
+    cp "${PROJECT_ROOT}/resources/app_icon.svg" "${APPDIR}/usr/share/icons/hicolor/scalable/apps/universal-converter.svg"
+fi
+
+if [ -f "${PROJECT_ROOT}/resources/icons/app_icon_256.png" ]; then
+    cp "${PROJECT_ROOT}/resources/icons/app_icon_256.png" "${APPDIR}/universal-converter.png"
+    cp "${PROJECT_ROOT}/resources/icons/app_icon_256.png" "${APPDIR}/.DirIcon"
+elif [ -f "${PROJECT_ROOT}/resources/app_icon.png" ]; then
     cp "${PROJECT_ROOT}/resources/app_icon.png" "${APPDIR}/universal-converter.png"
-else
-    # Create a dummy or standard icon
-    magick -size 256x256 xc:"#12161f" \
-        -fill "#4facfe" -draw "roundrectangle 24,24 232,232 20,20" \
-        -fill "#ffffff" -pointsize 42 -gravity center -annotate +0+0 "UC" \
-        "${APPDIR}/universal-converter.png"
-    cp "${APPDIR}/universal-converter.png" "${APPDIR}/usr/share/icons/hicolor/256x256/apps/universal-converter.png"
+    cp "${PROJECT_ROOT}/resources/app_icon.png" "${APPDIR}/.DirIcon"
 fi
 
 # Write qt.conf so Qt runtime always locates Plugins and Prefix within AppDir
