@@ -9,24 +9,47 @@
 #include <QUuid>
 #include <QSet>
 #include <QThreadPool>
+#include <QScopeGuard>
 
 namespace uc::engines {
 
-ImageMagickEngine::ImageMagickEngine(QObject* parent)
-    : QObject(parent)
-{
+ImageMagickEngine::ImageMagickEngine(QObject *parent) : QObject(parent) {}
+
+ImageMagickEngine::~ImageMagickEngine() { shutdown(); }
+
+void ImageMagickEngine::shutdown() {
+    const auto contexts = m_activeContexts;
+    for (const auto &ctx : contexts) {
+        ctx->isCancelled = true;
+        ctx->runner->cancel(0);
+    }
+    m_workers.waitForDone();
+    for (const auto &ctx : contexts) {
+        ctx->runner.reset();
+        QFile::remove(ctx->tempOutputPath);
+        finishCancellation(ctx->job->id());
+    }
 }
 
-bool ImageMagickEngine::canConvert(const QString& inputFormatId, const QString& outputFormatId) const {
+void ImageMagickEngine::finishCancellation(const QString &id) {
+    auto ctx = m_activeContexts.take(id);
+    if (!ctx)
+        return;
+    QFile::remove(ctx->tempOutputPath);
+    ctx->job->transitionTo(core::JobState::Cancelled, "Cancelled");
+    emit jobFinished(id, false, "Cancelled");
+}
+
+bool ImageMagickEngine::canConvert(const QString &inputFormatId, const QString &outputFormatId) const {
     if (VectorPipeline::canConvert(inputFormatId, outputFormatId)) {
         return true;
     }
 
-    const auto& registry = core::FormatRegistry::instance();
+    const auto &registry = core::FormatRegistry::instance();
     const QString in = registry.normalizeFormatId(inputFormatId);
     const QString out = registry.normalizeFormatId(outputFormatId);
-    const auto* inDef = registry.findById(in);
-    const auto* outDef = registry.findById(out);
+    const auto *inDef = registry.findById(in);
+    const auto *outDef = registry.findById(out);
     if (inDef && outDef) {
         const auto compat = registry.checkCompatibility(in, out);
         // Registry is authoritative when both formats are known — prevents
@@ -34,9 +57,9 @@ bool ImageMagickEngine::canConvert(const QString& inputFormatId, const QString& 
         return compat.isSupported && compat.responsibleEngine == "ImageMagick";
     }
 
-    const auto& caps = ImageMagickCapabilities::instance();
+    const auto &caps = ImageMagickCapabilities::instance();
     if (!caps.isDiscovered()) {
-        const auto& tc = app::ToolchainManager::instance();
+        const auto &tc = app::ToolchainManager::instance();
         if (tc.magick().isAvailable) {
             ImageMagickCapabilities::instance().discover(tc.magick().executablePath);
         }
@@ -47,13 +70,14 @@ bool ImageMagickEngine::canConvert(const QString& inputFormatId, const QString& 
     }
 
     // Default basic image formats if undiscovered
-    const QStringList basic = {"png", "jpeg", "jpg", "webp", "gif", "bmp", "tiff", "ico", "avif", "heic", "svg"};
+    const QStringList basic = {"png",  "jpeg", "jpg",  "webp", "gif", "bmp",
+                               "tiff", "ico",  "avif", "heic", "svg"};
     return basic.contains(inputFormatId.toLower()) && basic.contains(outputFormatId.toLower());
 }
 
 bool ImageMagickEngine::startMagickProcess(std::shared_ptr<RunningContext> ctx) {
     auto job = ctx->job;
-    const auto& tc = app::ToolchainManager::instance();
+    const auto &tc = app::ToolchainManager::instance();
     const auto magickInfo = tc.magick();
 
     if (!magickInfo.isAvailable) {
@@ -68,13 +92,20 @@ bool ImageMagickEngine::startMagickProcess(std::shared_ptr<RunningContext> ctx) 
     options.targetFormatId = targetFormat;
 
     const auto optsMap = job->options();
-    if (optsMap.contains("quality")) options.quality = optsMap["quality"].toInt();
-    if (optsMap.contains("width")) options.width = optsMap["width"].toInt();
-    if (optsMap.contains("height")) options.height = optsMap["height"].toInt();
-    if (optsMap.contains("stripMetadata")) options.stripMetadata = optsMap["stripMetadata"].toBool();
-    if (optsMap.contains("preserveAnimation")) options.preserveAnimation = optsMap["preserveAnimation"].toBool();
-    if (optsMap.contains("autoOrient")) options.autoOrient = optsMap["autoOrient"].toBool();
-    if (optsMap.contains("preserveAspectRatio")) options.preserveAspectRatio = optsMap["preserveAspectRatio"].toBool();
+    if (optsMap.contains("quality"))
+        options.quality = optsMap["quality"].toInt();
+    if (optsMap.contains("width"))
+        options.width = optsMap["width"].toInt();
+    if (optsMap.contains("height"))
+        options.height = optsMap["height"].toInt();
+    if (optsMap.contains("stripMetadata"))
+        options.stripMetadata = optsMap["stripMetadata"].toBool();
+    if (optsMap.contains("preserveAnimation"))
+        options.preserveAnimation = optsMap["preserveAnimation"].toBool();
+    if (optsMap.contains("autoOrient"))
+        options.autoOrient = optsMap["autoOrient"].toBool();
+    if (optsMap.contains("preserveAspectRatio"))
+        options.preserveAspectRatio = optsMap["preserveAspectRatio"].toBool();
 
     const auto argResult = ImageMagickArgBuilder::buildArguments(inputPath, ctx->tempOutputPath, options);
     if (!argResult.isValid) {
@@ -82,7 +113,8 @@ bool ImageMagickEngine::startMagickProcess(std::shared_ptr<RunningContext> ctx) 
         return false;
     }
 
-    job->transitionTo(core::JobState::Running, QString("Converting image to %1...").arg(targetFormat.toUpper()));
+    job->transitionTo(core::JobState::Running,
+                      QString("Converting image to %1...").arg(targetFormat.toUpper()));
     job->setProgress(-1, "Processing image..."); // Indeterminate progress
     job->setExecutedCommand(QString("%1 %2").arg(magickInfo.executablePath, argResult.arguments.join(' ')));
 
@@ -97,7 +129,8 @@ bool ImageMagickEngine::startMagickProcess(std::shared_ptr<RunningContext> ctx) 
 }
 
 bool ImageMagickEngine::executeJob(std::shared_ptr<core::ConversionJob> job) {
-    if (!job) return false;
+    if (!job)
+        return false;
 
     const QString inputPath = job->primaryInputPath();
     const QString inFormat = job->inputFormatId().toLower();
@@ -122,9 +155,7 @@ bool ImageMagickEngine::executeJob(std::shared_ptr<core::ConversionJob> job) {
     m_activeContexts[job->id()] = ctx;
 
     connect(ctx->runner.get(), &core::ProcessRunner::finished, this,
-            [this, id = job->id()](const core::ProcessResult& res) {
-                onProcessFinished(id, res);
-            });
+            [this, id = job->id()](const core::ProcessResult &res) { onProcessFinished(id, res); });
 
     if (job->state() == core::JobState::Queued) {
         job->transitionTo(core::JobState::Preparing);
@@ -132,17 +163,28 @@ bool ImageMagickEngine::executeJob(std::shared_ptr<core::ConversionJob> job) {
 
     // 1. Vector Pipeline Fast-Path: SVG -> Raster/PDF (Offloaded to worker thread)
     if (inFormat == "svg") {
-        job->transitionTo(core::JobState::Running, QString("Rendering vector graphics to %1...").arg(targetFormat.toUpper()));
+        job->transitionTo(core::JobState::Running,
+                          QString("Rendering vector graphics to %1...").arg(targetFormat.toUpper()));
 
         VectorRasterOptions vOpts;
         const auto optsMap = job->options();
-        if (optsMap.contains("width")) vOpts.width = optsMap["width"].toInt();
-        if (optsMap.contains("height")) vOpts.height = optsMap["height"].toInt();
-        if (optsMap.contains("dpi")) vOpts.dpi = optsMap["dpi"].toInt();
-        if (optsMap.contains("keepAspectRatio")) vOpts.keepAspectRatio = optsMap["keepAspectRatio"].toBool();
-        if (optsMap.contains("backgroundColor")) vOpts.backgroundColor = optsMap["backgroundColor"].toString();
+        if (optsMap.contains("width"))
+            vOpts.width = optsMap["width"].toInt();
+        if (optsMap.contains("height"))
+            vOpts.height = optsMap["height"].toInt();
+        if (optsMap.contains("dpi"))
+            vOpts.dpi = optsMap["dpi"].toInt();
+        if (optsMap.contains("keepAspectRatio"))
+            vOpts.keepAspectRatio = optsMap["keepAspectRatio"].toBool();
+        if (optsMap.contains("backgroundColor"))
+            vOpts.backgroundColor = optsMap["backgroundColor"].toString();
 
-        QThreadPool::globalInstance()->start([this, ctx, job, inputPath, tempOut, finalOut, vOpts]() {
+        m_workers.start([this, ctx, job, inputPath, tempOut, finalOut, vOpts]() {
+            auto cancellationGuard = qScopeGuard([this, ctx]() {
+                if (ctx->isCancelled)
+                    QMetaObject::invokeMethod(
+                        this, [this, ctx]() { finishCancellation(ctx->job->id()); }, Qt::QueuedConnection);
+            });
             if (ctx->isCancelled) {
                 QFile::remove(tempOut);
                 return;
@@ -150,39 +192,44 @@ bool ImageMagickEngine::executeJob(std::shared_ptr<core::ConversionJob> job) {
 
             const auto vRes = VectorPipeline::convertSvg(inputPath, tempOut, vOpts);
 
-            QMetaObject::invokeMethod(this, [this, ctx, job, vRes, tempOut, finalOut]() {
-                if (ctx->isCancelled) {
-                    QFile::remove(tempOut);
-                    m_activeContexts.remove(job->id());
-                    return;
-                }
-
-                if (vRes.isSuccess && QFile::exists(tempOut) && QFileInfo(tempOut).size() > 0) {
-                    QString publishError;
-                    if (!core::OutputPathPlanner::publishTempToFinal(tempOut, finalOut, &publishError)) {
-                        job->setError(publishError.isEmpty()
-                                          ? QString("Failed to move temporary vector output to: %1").arg(finalOut)
-                                          : publishError);
-                        job->transitionTo(core::JobState::Failed, job->errorMessage());
-                        m_activeContexts.remove(job->id());
-                        emit jobFinished(job->id(), false, "Filesystem publish failed");
+            QMetaObject::invokeMethod(
+                this,
+                [this, ctx, job, vRes, tempOut, finalOut]() {
+                    if (ctx->isCancelled) {
+                        QFile::remove(tempOut);
+                        finishCancellation(job->id());
                         return;
                     }
 
-                    job->setDiagnosticOutput(QString("Vector conversion completed using %1").arg(vRes.usedEngine));
-                    job->setProgress(100, "Completed successfully");
-                    job->transitionTo(core::JobState::Completed, "Completed");
-                    m_activeContexts.remove(job->id());
-                    emit jobFinished(job->id(), true, "Completed");
-                    return;
-                }
+                    if (vRes.isSuccess && QFile::exists(tempOut) && QFileInfo(tempOut).size() > 0) {
+                        QString publishError;
+                        if (!core::OutputPathPlanner::publishTempToFinal(tempOut, finalOut, &publishError)) {
+                            job->setError(
+                                publishError.isEmpty()
+                                    ? QString("Failed to move temporary vector output to: %1").arg(finalOut)
+                                    : publishError);
+                            job->transitionTo(core::JobState::Failed, job->errorMessage());
+                            m_activeContexts.remove(job->id());
+                            emit jobFinished(job->id(), false, "Filesystem publish failed");
+                            return;
+                        }
 
-                // If SVG vector pipeline returned error, fall back to ImageMagick
-                if (!startMagickProcess(ctx)) {
-                    m_activeContexts.remove(job->id());
-                    emit jobFinished(job->id(), false, job->errorMessage());
-                }
-            }, Qt::QueuedConnection);
+                        job->setDiagnosticOutput(
+                            QString("Vector conversion completed using %1").arg(vRes.usedEngine));
+                        job->setProgress(100, "Completed successfully");
+                        job->transitionTo(core::JobState::Completed, "Completed");
+                        m_activeContexts.remove(job->id());
+                        emit jobFinished(job->id(), true, "Completed");
+                        return;
+                    }
+
+                    // If SVG vector pipeline returned error, fall back to ImageMagick
+                    if (!startMagickProcess(ctx)) {
+                        m_activeContexts.remove(job->id());
+                        emit jobFinished(job->id(), false, job->errorMessage());
+                    }
+                },
+                Qt::QueuedConnection);
         });
 
         return true;
@@ -197,7 +244,7 @@ bool ImageMagickEngine::executeJob(std::shared_ptr<core::ConversionJob> job) {
     return true;
 }
 
-void ImageMagickEngine::cancelJob(const QString& jobId) {
+void ImageMagickEngine::cancelJob(const QString &jobId) {
     auto ctx = m_activeContexts.value(jobId, nullptr);
     if (ctx) {
         ctx->isCancelled = true;
@@ -207,9 +254,10 @@ void ImageMagickEngine::cancelJob(const QString& jobId) {
     }
 }
 
-void ImageMagickEngine::onProcessFinished(const QString& jobId, const core::ProcessResult& result) {
+void ImageMagickEngine::onProcessFinished(const QString &jobId, const core::ProcessResult &result) {
     auto ctx = m_activeContexts.value(jobId, nullptr);
-    if (!ctx || !ctx->job) return;
+    if (!ctx || !ctx->job)
+        return;
 
     ctx->job->setDiagnosticOutput(QString::fromUtf8(result.standardError));
 
@@ -224,19 +272,25 @@ void ImageMagickEngine::onProcessFinished(const QString& jobId, const core::Proc
     if (!result.isSuccess()) {
         m_activeContexts.remove(jobId);
         QFile::remove(ctx->tempOutputPath);
-        const QString err = result.errorMessage.isEmpty() ?
-                                "ImageMagick conversion failed." : result.errorMessage;
+        const QString err =
+            result.errorMessage.isEmpty() ? "ImageMagick conversion failed." : result.errorMessage;
         ctx->job->setError(err);
         emit jobFinished(jobId, false, err);
         return;
     }
 
+    ctx->job->setProgress(-1, "Validating and optimizing output…");
     // Offload inspection, optimization, and publishing to worker thread
-    const auto& tc = app::ToolchainManager::instance();
+    const auto &tc = app::ToolchainManager::instance();
     const QString magickExe = tc.magick().executablePath;
     const auto optsMap = ctx->job->options();
 
-    QThreadPool::globalInstance()->start([this, ctx, jobId, magickExe, optsMap]() {
+    m_workers.start([this, ctx, jobId, magickExe, optsMap]() {
+        auto cancellationGuard = qScopeGuard([this, ctx]() {
+            if (ctx->isCancelled)
+                QMetaObject::invokeMethod(
+                    this, [this, ctx]() { finishCancellation(ctx->job->id()); }, Qt::QueuedConnection);
+        });
         if (ctx->isCancelled) {
             QFile::remove(ctx->tempOutputPath);
             return;
@@ -245,11 +299,18 @@ void ImageMagickEngine::onProcessFinished(const QString& jobId, const core::Proc
         const auto inspect = ImageInspector::inspect(magickExe, ctx->tempOutputPath);
         if (!inspect.isValid) {
             QFile::remove(ctx->tempOutputPath);
-            QMetaObject::invokeMethod(this, [this, ctx, jobId, err = inspect.errorMessage]() {
-                m_activeContexts.remove(jobId);
-                ctx->job->setError(QString("Image validation failed: %1").arg(err));
-                emit jobFinished(jobId, false, err);
-            }, Qt::QueuedConnection);
+            QMetaObject::invokeMethod(
+                this,
+                [this, ctx, jobId, err = inspect.errorMessage]() {
+                    if (ctx->isCancelled) {
+                        finishCancellation(jobId);
+                        return;
+                    }
+                    m_activeContexts.remove(jobId);
+                    ctx->job->setError(QString("Image validation failed: %1").arg(err));
+                    emit jobFinished(jobId, false, err);
+                },
+                Qt::QueuedConnection);
             return;
         }
 
@@ -276,32 +337,36 @@ void ImageMagickEngine::onProcessFinished(const QString& jobId, const core::Proc
             return;
         }
 
-        QString publishError;
-        const bool published = core::OutputPathPlanner::publishTempToFinal(
-            ctx->tempOutputPath, ctx->finalOutputPath, &publishError);
+        QMetaObject::invokeMethod(
+            this,
+            [this, ctx, jobId, optDiagnostic]() {
+                if (ctx->isCancelled) {
+                    finishCancellation(jobId);
+                    return;
+                }
+                QString publishError;
+                const bool published = core::OutputPathPlanner::publishTempToFinal(
+                    ctx->tempOutputPath, ctx->finalOutputPath, &publishError);
+                m_activeContexts.remove(jobId);
 
-        QMetaObject::invokeMethod(this, [this, ctx, jobId, published, publishError, optDiagnostic]() {
-            m_activeContexts.remove(jobId);
-            if (ctx->isCancelled) {
-                return;
-            }
+                if (!optDiagnostic.isEmpty()) {
+                    ctx->job->setDiagnosticOutput(ctx->job->diagnosticOutput() + optDiagnostic);
+                }
 
-            if (!optDiagnostic.isEmpty()) {
-                ctx->job->setDiagnosticOutput(ctx->job->diagnosticOutput() + optDiagnostic);
-            }
+                if (!published) {
+                    ctx->job->setError(publishError.isEmpty()
+                                           ? QString("Failed to move temporary file to final path: %1")
+                                                 .arg(ctx->finalOutputPath)
+                                           : publishError);
+                    emit jobFinished(jobId, false, "Filesystem publish failed");
+                    return;
+                }
 
-            if (!published) {
-                ctx->job->setError(publishError.isEmpty()
-                                       ? QString("Failed to move temporary file to final path: %1").arg(ctx->finalOutputPath)
-                                       : publishError);
-                emit jobFinished(jobId, false, "Filesystem publish failed");
-                return;
-            }
-
-            ctx->job->setProgress(100, "Completed successfully");
-            ctx->job->transitionTo(core::JobState::Completed, "Completed");
-            emit jobFinished(jobId, true, "Completed");
-        }, Qt::QueuedConnection);
+                ctx->job->setProgress(100, "Completed successfully");
+                ctx->job->transitionTo(core::JobState::Completed, "Completed");
+                emit jobFinished(jobId, true, "Completed");
+            },
+            Qt::QueuedConnection);
     });
 }
 

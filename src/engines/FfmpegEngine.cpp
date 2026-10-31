@@ -9,36 +9,65 @@
 #include <QUuid>
 #include <QSet>
 #include <QThreadPool>
+#include <QScopeGuard>
 
 namespace uc::engines {
 
-FfmpegEngine::FfmpegEngine(QObject* parent)
-    : QObject(parent)
-{
+FfmpegEngine::FfmpegEngine(QObject *parent) : QObject(parent) {}
+
+FfmpegEngine::~FfmpegEngine() { shutdown(); }
+
+void FfmpegEngine::shutdown() {
+    const auto contexts = m_activeContexts;
+    for (const auto &ctx : contexts) {
+        ctx->isCancelled = true;
+        ctx->runner->cancel(0);
+    }
+    m_workers.waitForDone();
+    for (const auto &ctx : contexts) {
+        ctx->runner.reset();
+        QFile::remove(ctx->tempOutputPath);
+        finishCancellation(ctx->job->id());
+    }
 }
 
-bool FfmpegEngine::canConvert(const QString& inputFormatId, const QString& outputFormatId) const {
-    const auto& registry = core::FormatRegistry::instance();
+void FfmpegEngine::finishCancellation(const QString &id) {
+    auto ctx = m_activeContexts.take(id);
+    if (!ctx)
+        return;
+    QFile::remove(ctx->tempOutputPath);
+    ctx->job->transitionTo(core::JobState::Cancelled, "Cancelled");
+    emit jobFinished(id, false, "Cancelled");
+}
+
+bool FfmpegEngine::canConvert(const QString &inputFormatId, const QString &outputFormatId) const {
+    const auto &registry = core::FormatRegistry::instance();
     const QString in = registry.normalizeFormatId(inputFormatId);
     const QString out = registry.normalizeFormatId(outputFormatId);
 
     // Single source of truth: delegate to FormatRegistry when both formats known.
     // Falls back to legacy lists only for formats absent from the registry
     // (e.g. legacy containers) to preserve backward compatibility.
-    const auto* inDef = registry.findById(in);
-    const auto* outDef = registry.findById(out);
+    const auto *inDef = registry.findById(in);
+    const auto *outDef = registry.findById(out);
     if (inDef && outDef) {
         const auto compat = registry.checkCompatibility(in, out);
         if (!compat.isSupported || compat.responsibleEngine != "FFmpeg") {
             return false;
         }
-        if (out == "rm" || out == "rmvb") return false; // encode-restricted
-        if (in == "sub" && out == "sub") return false;  // 'sub' read-only
+        if (out == "rm" || out == "rmvb")
+            return false; // encode-restricted
+        if (in == "sub" && out == "sub")
+            return false; // 'sub' read-only
         return true;
     }
 
-    static const QSet<QString> videoFormats = {"mp4", "mkv", "webm", "mov", "avi", "wmv", "flv", "ts", "mts", "m2ts", "vob", "ogv", "3gp", "3g2", "asf", "mxf", "gxf", "nut", "amv", "rm", "rmvb"};
-    static const QSet<QString> audioFormats = {"mp3", "wav", "flac", "aac", "ogg", "oga", "opus", "m4a", "wma", "ac3", "aiff", "mp2", "au", "m4b", "voc", "qoa", "caf", "mogg", "mp1", "mpc", "dsd"};
+    static const QSet<QString> videoFormats = {"mp4", "mkv", "webm", "mov", "avi", "wmv", "flv",
+                                               "ts",  "mts", "m2ts", "vob", "ogv", "3gp", "3g2",
+                                               "asf", "mxf", "gxf",  "nut", "amv", "rm",  "rmvb"};
+    static const QSet<QString> audioFormats = {"mp3", "wav", "flac", "aac",  "ogg", "oga", "opus",
+                                               "m4a", "wma", "ac3",  "aiff", "mp2", "au",  "m4b",
+                                               "voc", "qoa", "caf",  "mogg", "mp1", "mpc", "dsd"};
     static const QSet<QString> subtitleFormats = {"srt", "vtt", "ass", "ssa", "sub"};
 
     const bool inIsVideo = videoFormats.contains(in);
@@ -54,19 +83,23 @@ bool FfmpegEngine::canConvert(const QString& inputFormatId, const QString& outpu
         return out != "sub"; // 'sub' (MicroDVD) is read-only
     }
 
-    if (!inIsVideo && !inIsAudio) return false;
-    if (!outIsVideo && !outIsAudio) return false;
+    if (!inIsVideo && !inIsAudio)
+        return false;
+    if (!outIsVideo && !outIsAudio)
+        return false;
 
     // rm / rmvb cannot be encoded
-    if (out == "rm" || out == "rmvb") return false;
+    if (out == "rm" || out == "rmvb")
+        return false;
 
     return true;
 }
 
 bool FfmpegEngine::executeJob(std::shared_ptr<core::ConversionJob> job) {
-    if (!job) return false;
+    if (!job)
+        return false;
 
-    const auto& tc = app::ToolchainManager::instance();
+    const auto &tc = app::ToolchainManager::instance();
     const auto ffmpegInfo = tc.ffmpeg();
     const auto ffprobeInfo = tc.ffprobe();
 
@@ -104,14 +137,10 @@ bool FfmpegEngine::executeJob(std::shared_ptr<core::ConversionJob> job) {
 
     // Connect progress and completion
     connect(ctx->runner.get(), &core::ProcessRunner::readyReadStandardOutput, this,
-            [this, id = job->id()](const QByteArray& chunk) {
-                onProcessOutput(id, chunk);
-            });
+            [this, id = job->id()](const QByteArray &chunk) { onProcessOutput(id, chunk); });
 
     connect(ctx->runner.get(), &core::ProcessRunner::finished, this,
-            [this, id = job->id()](const core::ProcessResult& res) {
-                onProcessFinished(id, res);
-            });
+            [this, id = job->id()](const core::ProcessResult &res) { onProcessFinished(id, res); });
 
     if (job->state() == core::JobState::Queued) {
         job->transitionTo(core::JobState::Preparing, "Analyzing media stream...");
@@ -121,7 +150,15 @@ bool FfmpegEngine::executeJob(std::shared_ptr<core::ConversionJob> job) {
     const QString ffprobePath = ffprobeInfo.executablePath;
     const QString ffmpegPath = ffmpegInfo.executablePath;
 
-    QThreadPool::globalInstance()->start([this, ctx, job, isSubJob, inputPath, tempOut, targetFormat, ffprobePath, ffmpegPath]() {
+    const bool hardwareEnabled = app::AppSettings::instance().hardwareAccelerationEnabled();
+    const auto jobOptions = job->options();
+    m_workers.start([this, ctx, job, isSubJob, inputPath, tempOut, targetFormat, ffprobePath, ffmpegPath,
+                     hardwareEnabled, jobOptions]() {
+        auto cancellationGuard = qScopeGuard([this, ctx]() {
+            if (ctx->isCancelled)
+                QMetaObject::invokeMethod(
+                    this, [this, ctx]() { finishCancellation(ctx->job->id()); }, Qt::QueuedConnection);
+        });
         if (ctx->isCancelled) {
             QFile::remove(tempOut);
             return;
@@ -131,12 +168,18 @@ bool FfmpegEngine::executeJob(std::shared_ptr<core::ConversionJob> job) {
         if (!isSubJob && !ffprobePath.isEmpty()) {
             probe = MediaProbe::probeFile(ffprobePath, inputPath);
             if (!probe.isValid) {
-                QMetaObject::invokeMethod(this, [this, ctx, job, errMsg = probe.errorMessage]() {
-                    if (ctx->isCancelled) return;
-                    job->setError(QString("Failed to probe input file: %1").arg(errMsg));
-                    m_activeContexts.remove(job->id());
-                    emit jobFinished(job->id(), false, job->errorMessage());
-                }, Qt::QueuedConnection);
+                QMetaObject::invokeMethod(
+                    this,
+                    [this, ctx, job, errMsg = probe.errorMessage]() {
+                        if (ctx->isCancelled) {
+                            finishCancellation(ctx->job->id());
+                            return;
+                        }
+                        job->setError(QString("Failed to probe input file: %1").arg(errMsg));
+                        m_activeContexts.remove(job->id());
+                        emit jobFinished(job->id(), false, job->errorMessage());
+                    },
+                    Qt::QueuedConnection);
                 return;
             }
         }
@@ -151,69 +194,89 @@ bool FfmpegEngine::executeJob(std::shared_ptr<core::ConversionJob> job) {
             argResult = FfmpegArgBuilder::buildSubtitleArguments(inputPath, tempOut, targetFormat);
         } else {
             const auto sysCaps = core::SystemInfo::probe();
-            const auto& settings = app::AppSettings::instance();
 
             FfmpegConversionOptions options;
             options.targetFormatId = targetFormat;
-            options.hwMode = settings.hardwareAccelerationEnabled() ?
-                                 HardwareEncoderMode::Auto : HardwareEncoderMode::Disabled;
+            options.hwMode = hardwareEnabled ? HardwareEncoderMode::Auto : HardwareEncoderMode::Disabled;
 
-            const auto opts = job->options();
-            if (opts.contains("customVideoCodec")) options.customVideoCodec = opts["customVideoCodec"].toString();
-            if (opts.contains("customVideoBitrateKbps")) options.customVideoBitrateKbps = opts["customVideoBitrateKbps"].toInt();
-            if (opts.contains("customAudioCodec")) options.customAudioCodec = opts["customAudioCodec"].toString();
-            if (opts.contains("customAudioBitrateKbps")) options.customAudioBitrateKbps = opts["customAudioBitrateKbps"].toInt();
-            if (opts.contains("customAudioSampleRate")) options.customAudioSampleRate = opts["customAudioSampleRate"].toInt();
-            if (opts.contains("customAudioChannels")) options.customAudioChannels = opts["customAudioChannels"].toInt();
-            if (opts.contains("customWidth")) options.customWidth = opts["customWidth"].toInt();
-            if (opts.contains("customHeight")) options.customHeight = opts["customHeight"].toInt();
-            if (opts.contains("customFps")) options.customFps = opts["customFps"].toInt();
-            if (opts.contains("crf")) options.crf = opts["crf"].toInt();
-            if (opts.contains("preset")) options.preset = static_cast<ConversionPreset>(opts["preset"].toInt());
-            if (opts.contains("stripMetadata")) options.stripMetadata = opts["stripMetadata"].toBool();
+            const auto opts = jobOptions;
+            if (opts.contains("customVideoCodec"))
+                options.customVideoCodec = opts["customVideoCodec"].toString();
+            if (opts.contains("customVideoBitrateKbps"))
+                options.customVideoBitrateKbps = opts["customVideoBitrateKbps"].toInt();
+            if (opts.contains("customAudioCodec"))
+                options.customAudioCodec = opts["customAudioCodec"].toString();
+            if (opts.contains("customAudioBitrateKbps"))
+                options.customAudioBitrateKbps = opts["customAudioBitrateKbps"].toInt();
+            if (opts.contains("customAudioSampleRate"))
+                options.customAudioSampleRate = opts["customAudioSampleRate"].toInt();
+            if (opts.contains("customAudioChannels"))
+                options.customAudioChannels = opts["customAudioChannels"].toInt();
+            if (opts.contains("customWidth"))
+                options.customWidth = opts["customWidth"].toInt();
+            if (opts.contains("customHeight"))
+                options.customHeight = opts["customHeight"].toInt();
+            if (opts.contains("customFps"))
+                options.customFps = opts["customFps"].toInt();
+            if (opts.contains("crf"))
+                options.crf = opts["crf"].toInt();
+            if (opts.contains("preset"))
+                options.preset = static_cast<ConversionPreset>(opts["preset"].toInt());
+            if (opts.contains("stripMetadata"))
+                options.stripMetadata = opts["stripMetadata"].toBool();
 
-            argResult = FfmpegArgBuilder::buildArguments(
-                inputPath, tempOut, probe, options, sysCaps.availableHwEncoders);
+            argResult = FfmpegArgBuilder::buildArguments(inputPath, tempOut, probe, options,
+                                                         sysCaps.availableHwEncoders);
         }
 
         if (!argResult.isValid) {
-            QMetaObject::invokeMethod(this, [this, ctx, job, errMsg = argResult.errorMessage]() {
-                if (ctx->isCancelled) return;
-                job->setError(errMsg);
-                m_activeContexts.remove(job->id());
-                emit jobFinished(job->id(), false, errMsg);
-            }, Qt::QueuedConnection);
+            QMetaObject::invokeMethod(
+                this,
+                [this, ctx, job, errMsg = argResult.errorMessage]() {
+                    if (ctx->isCancelled) {
+                        finishCancellation(ctx->job->id());
+                        return;
+                    }
+                    job->setError(errMsg);
+                    m_activeContexts.remove(job->id());
+                    emit jobFinished(job->id(), false, errMsg);
+                },
+                Qt::QueuedConnection);
             return;
         }
 
-        QMetaObject::invokeMethod(this, [this, ctx, job, ffmpegPath, argResult, duration = probe.durationSeconds, targetFormat]() {
-            if (ctx->isCancelled) {
-                QFile::remove(ctx->tempOutputPath);
-                m_activeContexts.remove(job->id());
-                return;
-            }
+        QMetaObject::invokeMethod(
+            this,
+            [this, ctx, job, ffmpegPath, argResult, duration = probe.durationSeconds, targetFormat]() {
+                if (ctx->isCancelled) {
+                    QFile::remove(ctx->tempOutputPath);
+                    finishCancellation(job->id());
+                    return;
+                }
 
-            ctx->parser = std::make_unique<FfmpegProgressParser>(duration);
-            job->transitionTo(core::JobState::Running,
-                              QString("Converting with %1 (%2)...")
-                                  .arg(argResult.chosenVideoCodec.isEmpty() ? argResult.chosenAudioCodec : argResult.chosenVideoCodec,
-                                       argResult.isHardwareAccelerated ? "Hardware" : "CPU"));
-            job->setExecutedCommand(QString("%1 %2").arg(ffmpegPath, argResult.arguments.join(' ')));
+                ctx->parser = std::make_unique<FfmpegProgressParser>(duration);
+                job->transitionTo(core::JobState::Running,
+                                  QString("Converting with %1 (%2)...")
+                                      .arg(argResult.chosenVideoCodec.isEmpty() ? argResult.chosenAudioCodec
+                                                                                : argResult.chosenVideoCodec,
+                                           argResult.isHardwareAccelerated ? "Hardware" : "CPU"));
+                job->setExecutedCommand(QString("%1 %2").arg(ffmpegPath, argResult.arguments.join(' ')));
 
-            const bool started = ctx->runner->start(ffmpegPath, argResult.arguments);
-            if (!started) {
-                QFile::remove(ctx->tempOutputPath);
-                m_activeContexts.remove(job->id());
-                job->setError("Failed to launch FFmpeg child process.");
-                emit jobFinished(job->id(), false, "Failed to launch FFmpeg process.");
-            }
-        }, Qt::QueuedConnection);
+                const bool started = ctx->runner->start(ffmpegPath, argResult.arguments);
+                if (!started) {
+                    QFile::remove(ctx->tempOutputPath);
+                    m_activeContexts.remove(job->id());
+                    job->setError("Failed to launch FFmpeg child process.");
+                    emit jobFinished(job->id(), false, "Failed to launch FFmpeg process.");
+                }
+            },
+            Qt::QueuedConnection);
     });
 
     return true;
 }
 
-void FfmpegEngine::cancelJob(const QString& jobId) {
+void FfmpegEngine::cancelJob(const QString &jobId) {
     auto ctx = m_activeContexts.value(jobId, nullptr);
     if (ctx && ctx->runner) {
         ctx->isCancelled = true;
@@ -221,13 +284,17 @@ void FfmpegEngine::cancelJob(const QString& jobId) {
     }
 }
 
-void FfmpegEngine::onProcessOutput(const QString& jobId, const QByteArray& data) {
+void FfmpegEngine::onProcessOutput(const QString &jobId, const QByteArray &data) {
     auto ctx = m_activeContexts.value(jobId, nullptr);
-    if (!ctx || !ctx->job || ctx->isCancelled) return;
+    if (!ctx || !ctx->job || ctx->isCancelled)
+        return;
 
     const auto snapshots = ctx->parser->feedChunk(data);
-    for (const auto& snap : snapshots) {
+    for (const auto &snap : snapshots) {
         const int pct = ctx->parser->calculatePercentage(snap);
+        const double remaining = ctx->parser->totalDuration() - snap.outTimeSeconds;
+        ctx->job->setTelemetry(snap.speed,
+                               snap.speed > 0 && remaining >= 0 ? qint64(remaining / snap.speed) : -1);
         QString statusMsg;
         if (snap.speed > 0.0) {
             statusMsg = QString("Converting... %1% (Speed: %2x)")
@@ -240,13 +307,15 @@ void FfmpegEngine::onProcessOutput(const QString& jobId, const QByteArray& data)
     }
 }
 
-void FfmpegEngine::onProcessFinished(const QString& jobId, const core::ProcessResult& result) {
-    auto ctx = m_activeContexts.take(jobId);
-    if (!ctx || !ctx->job) return;
+void FfmpegEngine::onProcessFinished(const QString &jobId, const core::ProcessResult &result) {
+    auto ctx = m_activeContexts.value(jobId);
+    if (!ctx || !ctx->job)
+        return;
 
     ctx->job->setDiagnosticOutput(QString::fromUtf8(result.standardError));
 
     if (ctx->isCancelled || result.exitReason == core::ProcessExitReason::Cancelled) {
+        m_activeContexts.remove(jobId);
         QFile::remove(ctx->tempOutputPath);
         ctx->job->transitionTo(core::JobState::Cancelled, "Conversion cancelled by user.");
         emit jobFinished(jobId, false, "Cancelled");
@@ -254,54 +323,59 @@ void FfmpegEngine::onProcessFinished(const QString& jobId, const core::ProcessRe
     }
 
     if (!result.isSuccess()) {
+        m_activeContexts.remove(jobId);
         QFile::remove(ctx->tempOutputPath);
-        const QString err = result.errorMessage.isEmpty() ?
-                                "FFmpeg conversion failed." : result.errorMessage;
+        const QString err = result.errorMessage.isEmpty() ? "FFmpeg conversion failed." : result.errorMessage;
         ctx->job->setError(err);
         emit jobFinished(jobId, false, err);
         return;
     }
 
-    const bool isSub = FfmpegArgBuilder::isSubtitleContainer(ctx->job->outputFormatId());
-    const bool isAnimImg = FfmpegArgBuilder::isAnimatedImageContainer(ctx->job->outputFormatId());
-
-    if (!isSub && !isAnimImg) {
-        // Output validation via ffprobe for media streams
-        const auto& tc = app::ToolchainManager::instance();
-        const QString ffprobePath = tc.ffprobe().executablePath;
-        const bool isAudioOnly = FfmpegArgBuilder::isAudioContainer(ctx->job->outputFormatId());
-
-        const auto val = OutputValidator::validate(ffprobePath, ctx->tempOutputPath, ctx->job->outputFormatId(), isAudioOnly);
-        if (!val.isValid) {
-            QFile::remove(ctx->tempOutputPath);
-            ctx->job->setError(QString("Output validation failed: %1").arg(val.errorMessage));
-            emit jobFinished(jobId, false, val.errorMessage);
-            return;
+    ctx->job->setProgress(-1, "Validating output…");
+    const QString outputFormat = ctx->job->outputFormatId();
+    const QString ffprobe = app::ToolchainManager::instance().ffprobe().executablePath;
+    m_workers.start([this, ctx, jobId, outputFormat, ffprobe]() {
+        QString error;
+        if (!ctx->isCancelled) {
+            if (FfmpegArgBuilder::isSubtitleContainer(outputFormat) ||
+                FfmpegArgBuilder::isAnimatedImageContainer(outputFormat)) {
+                core::OutputPathPlanner::validateProducedFile(ctx->tempOutputPath, 16, &error);
+            } else {
+                const auto result =
+                    OutputValidator::validate(ffprobe, ctx->tempOutputPath, outputFormat,
+                                              FfmpegArgBuilder::isAudioContainer(outputFormat));
+                if (!result.isValid)
+                    error = "Output validation failed: " + result.errorMessage;
+            }
         }
-    } else {
-        // Subtitle or Animated image validation: ensure file was produced and has non-zero size
-        QString prodError;
-        if (!core::OutputPathPlanner::validateProducedFile(ctx->tempOutputPath, 16, &prodError)) {
-            QFile::remove(ctx->tempOutputPath);
-            ctx->job->setError(prodError.isEmpty() ? "Output file empty or missing" : prodError);
-            emit jobFinished(jobId, false, "Output file empty or missing");
-            return;
-        }
-    }
-
-    // Publish final file (atomic replace — never deletes existing target on failure)
-    QString publishError;
-    if (!core::OutputPathPlanner::publishTempToFinal(ctx->tempOutputPath, ctx->finalOutputPath, &publishError)) {
-        ctx->job->setError(publishError.isEmpty()
-                               ? QString("Failed to move temporary file to final path: %1").arg(ctx->finalOutputPath)
-                               : publishError);
-        emit jobFinished(jobId, false, "Filesystem publish failed");
-        return;
-    }
-
-    ctx->job->setProgress(100, "Completed successfully");
-    ctx->job->transitionTo(core::JobState::Completed, "Completed");
-    emit jobFinished(jobId, true, "Completed");
+        QMetaObject::invokeMethod(
+            this,
+            [this, ctx, jobId, error]() {
+                if (ctx->isCancelled) {
+                    finishCancellation(jobId);
+                    return;
+                }
+                if (!m_activeContexts.remove(jobId))
+                    return;
+                if (!error.isEmpty()) {
+                    QFile::remove(ctx->tempOutputPath);
+                    ctx->job->setError(error);
+                    emit jobFinished(jobId, false, error);
+                    return;
+                }
+                QString publishError;
+                if (!core::OutputPathPlanner::publishTempToFinal(ctx->tempOutputPath, ctx->finalOutputPath,
+                                                                 &publishError)) {
+                    ctx->job->setError(publishError);
+                    emit jobFinished(jobId, false, publishError);
+                    return;
+                }
+                ctx->job->setProgress(100, "Completed successfully");
+                ctx->job->transitionTo(core::JobState::Completed, "Completed");
+                emit jobFinished(jobId, true, "Completed");
+            },
+            Qt::QueuedConnection);
+    });
 }
 
 } // namespace uc::engines

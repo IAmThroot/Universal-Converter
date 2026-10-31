@@ -59,12 +59,24 @@ jobs:
           chmod +x scripts/package-linux-appimage.sh
           ./scripts/package-linux-appimage.sh
 
+      - name: Run regression suites and check package
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          ctest --test-dir build --output-on-failure
+          test -s dist/UniversalConverter-x86_64.AppImage
+          dist/UniversalConverter.AppDir/usr/bin/engines/pandoc/pandoc --version
+          dist/UniversalConverter.AppDir/usr/bin/engines/typst/typst --version
+          echo 'Package smoke' > /tmp/uc-package-smoke.md
+          dist/UniversalConverter.AppDir/usr/bin/engines/pandoc/pandoc /tmp/uc-package-smoke.md --pdf-engine="$PWD/dist/UniversalConverter.AppDir/usr/bin/engines/typst/typst" -o /tmp/uc-package-smoke.pdf
+          test -s /tmp/uc-package-smoke.pdf
+
       - name: Upload Linux AppImage
         uses: actions/upload-artifact@v4
         with:
           name: UniversalConverter-Linux-x86_64
           path: dist/UniversalConverter-x86_64.AppImage
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   build-windows:
     name: Windows x64 (NSIS + Portable ZIP)
@@ -122,11 +134,37 @@ jobs:
         run: |
           cmake --build build --config Release
 
+      - name: Run regression suites
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build -C Release --output-on-failure
+
       - name: Package with CPack (NSIS Installer + Portable ZIP)
         shell: bash
         run: |
           cd build
           cpack -C Release --verbose
+
+      - name: Smoke test portable package
+        shell: pwsh
+        run: |
+          $archive = Get-ChildItem build/UniversalConverter-*-win64.zip | Select-Object -First 1
+          if (!$archive) { throw "Portable archive missing" }
+          $stage = Join-Path $env:RUNNER_TEMP "uc-portable-smoke"
+          Expand-Archive $archive.FullName $stage
+          $app = Get-ChildItem $stage -Filter UniversalConverter.exe -Recurse | Select-Object -First 1
+          if (!$app) { throw "Packaged executable missing" }
+          $root = $app.DirectoryName
+          $source = Join-Path $stage "sample.md"
+          Set-Content $source "Package smoke"
+          & "$root\engines\pandoc\pandoc.exe" "$source" "--pdf-engine=$root\engines\typst\typst.exe" -o "$stage\sample.pdf"
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path "$stage\sample.pdf")) { throw "Packaged PDF export failed" }
+          Remove-Item Env:\QT_QPA_PLATFORM -ErrorAction SilentlyContinue
+          $process = Start-Process $app.FullName -PassThru
+          Start-Sleep -Seconds 3
+          if ($process.HasExited) { throw "Packaged application exited unexpectedly" }
+          Stop-Process -Id $process.Id
 
       - name: Upload Windows Packages
         uses: actions/upload-artifact@v4
@@ -137,9 +175,24 @@ jobs:
             build/UniversalConverter-*-win64.zip
 
 
+  sanitizer:
+    name: Linux sanitizers
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build qt6-base-dev libqt6svg6-dev ffmpeg imagemagick pandoc librsvg2-bin
+      - name: Build and test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          cmake -S . -B build -G Ninja -DENABLE_SANITIZERS=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+
   release:
     name: Publish GitHub Release
-    needs: [ build-linux, build-windows ]
+    needs: [ build-linux, build-windows, sanitizer ]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:

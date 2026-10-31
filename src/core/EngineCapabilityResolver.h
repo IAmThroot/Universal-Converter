@@ -3,6 +3,8 @@
 #include <QString>
 #include <QStringList>
 #include <QList>
+#include <QObject>
+#include <QVariantMap>
 #include "FormatRegistry.h"
 
 namespace uc::core {
@@ -23,24 +25,38 @@ struct DynamicFormatCapability {
     QString delegateDetail;
 };
 
-class EngineCapabilityResolver {
-public:
-    static EngineCapabilityResolver& instance();
+struct RouteCapability {
+    bool available{false};
+    QString reason;
+    QString engine;
+};
+
+class EngineCapabilityResolver : public QObject {
+    Q_OBJECT
+  public:
+    static EngineCapabilityResolver &instance();
 
     void refresh();
+    RouteCapability resolveRoute(const QString &input, const QString &output,
+                                 const QVariantMap &options = {}) const;
+  signals:
+    void capabilitiesChanged();
 
+  public:
     QList<DynamicFormatCapability> allResolvedCapabilities() const;
-    DynamicFormatCapability resolveFormat(const QString& formatId) const;
+    DynamicFormatCapability resolveFormat(const QString &formatId) const;
 
     int totalRecognizedCount() const;
     int totalAvailableCount() const;
     int totalVerifiedCount() const;
 
-private:
+  private:
     EngineCapabilityResolver();
     ~EngineCapabilityResolver() = default;
 
     QMap<QString, DynamicFormatCapability> m_cache;
+    QString m_muxers;
+    QString m_encoders;
 };
 
 } // namespace uc::core

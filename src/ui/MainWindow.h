@@ -8,9 +8,9 @@
 #include "../core/ConversionHistoryManager.h"
 
 namespace uc::core {
-    class ConversionOrchestrator;
-    class WatchFolderService;
-}
+class ConversionOrchestrator;
+class WatchFolderService;
+} // namespace uc::core
 
 namespace uc::ui {
 
@@ -20,19 +20,21 @@ class QueueViewWidget;
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
-public:
-    explicit MainWindow(QWidget* parent = nullptr);
+  public:
+    explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override = default;
 
-private slots:
-    void onFilesDropped(const QStringList& filePaths);
+  protected:
+    void closeEvent(QCloseEvent *event) override;
+  private slots:
+    void onFilesDropped(const QStringList &filePaths);
     void onBrowseFilesClicked();
     void onOpenSettingsClicked();
     void onOpenHistoryClicked();
-    void onRetryHistoryJob(const core::HistoryRecord& record);
+    void onRetryHistoryJob(const core::HistoryRecord &record);
     void updateToolchainStatus();
 
-private:
+  private:
     void setupUi();
     void setupMenuBar();
     void setupStatusBar();
@@ -40,12 +42,12 @@ private:
 
     std::shared_ptr<core::ConversionOrchestrator> m_orchestrator;
     std::shared_ptr<core::WatchFolderService> m_watchFolderService;
-    DropZoneWidget* m_dropZone{nullptr};
-    QueueViewWidget* m_queueView{nullptr};
-    QLabel* m_statusLabel{nullptr};
-    QLabel* m_toolchainStatusLabel{nullptr};
-    QPushButton* m_historyBtn{nullptr};
-    QPushButton* m_settingsBtn{nullptr};
+    DropZoneWidget *m_dropZone{nullptr};
+    QueueViewWidget *m_queueView{nullptr};
+    QLabel *m_statusLabel{nullptr};
+    QLabel *m_toolchainStatusLabel{nullptr};
+    QPushButton *m_historyBtn{nullptr};
+    QPushButton *m_settingsBtn{nullptr};
 };
 
 } // namespace uc::ui

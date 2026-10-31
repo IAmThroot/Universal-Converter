@@ -1,5 +1,6 @@
 #include "ConversionHistoryManager.h"
 #include <QStandardPaths>
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QSaveFile>
@@ -11,7 +12,7 @@
 
 namespace uc::core {
 
-ConversionHistoryManager& ConversionHistoryManager::instance() {
+ConversionHistoryManager &ConversionHistoryManager::instance() {
     static ConversionHistoryManager s_instance;
     return s_instance;
 }
@@ -28,8 +29,13 @@ ConversionHistoryManager::~ConversionHistoryManager() {
 
 QString ConversionHistoryManager::historyFilePath() const {
     static QString s_cached;
-    if (!s_cached.isEmpty()) return s_cached;
-    const QString appData = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (!s_cached.isEmpty())
+        return s_cached;
+    const QString appData =
+        (QCoreApplication::instance() &&
+                 !QCoreApplication::instance()->property("testDataDirectory").toString().isEmpty()
+             ? QCoreApplication::instance()->property("testDataDirectory").toString()
+             : QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
     if (!appData.isEmpty()) {
         QDir().mkpath(appData);
         s_cached = QDir(appData).filePath("conversion_history.json");
@@ -39,8 +45,9 @@ QString ConversionHistoryManager::historyFilePath() const {
     return s_cached;
 }
 
-void ConversionHistoryManager::recordJob(const ConversionJob* job, qint64 durationMs) {
-    if (!job) return;
+void ConversionHistoryManager::recordJob(const ConversionJob *job, qint64 durationMs) {
+    if (!job)
+        return;
 
     QMutexLocker locker(&m_mutex);
 
@@ -53,22 +60,34 @@ void ConversionHistoryManager::recordJob(const ConversionJob* job, qint64 durati
     record.outputFormatId = job->outputFormatId();
     record.finalOutputPath = job->finalOutputPath();
     record.outputFileSizeBytes = QFileInfo(record.finalOutputPath).size();
-    
+
     switch (job->engine()) {
-        case EngineType::FFmpeg: record.engineName = "FFmpeg"; break;
-        case EngineType::ImageMagick: record.engineName = "ImageMagick"; break;
-        case EngineType::Pandoc: record.engineName = "Pandoc"; break;
-        default: record.engineName = "Unknown"; break;
+    case EngineType::FFmpeg:
+        record.engineName = "FFmpeg";
+        break;
+    case EngineType::ImageMagick:
+        record.engineName = "ImageMagick";
+        break;
+    case EngineType::Pandoc:
+        record.engineName = "Pandoc";
+        break;
+    default:
+        record.engineName = "Unknown";
+        break;
     }
 
     record.finalState = job->state();
     record.errorMessage = job->errorMessage();
     record.executedCommand = job->executedCommand();
     const QString diag = job->diagnosticOutput();
-    record.diagnosticOutput = diag.size() > 32768 ? diag.left(32768) + "\n...[diagnostic output truncated]" : diag;
+    record.diagnosticOutput =
+        diag.size() > 32768 ? diag.left(32768) + "\n...[diagnostic output truncated]" : diag;
     record.timestamp = job->completedAt().isValid() ? job->completedAt() : QDateTime::currentDateTime();
     record.durationMs = durationMs;
     record.options = job->options();
+    record.speed = job->speed();
+    record.etaSeconds = job->etaSeconds();
+    record.retryCount = job->retryCount();
 
     // Prepend (newest first)
     m_records.prepend(record);
@@ -95,7 +114,7 @@ void ConversionHistoryManager::clearHistory() {
     save(true);
 }
 
-void ConversionHistoryManager::removeRecord(const QString& id) {
+void ConversionHistoryManager::removeRecord(const QString &id) {
     {
         QMutexLocker locker(&m_mutex);
         for (int i = 0; i < m_records.size(); ++i) {
@@ -117,6 +136,7 @@ void ConversionHistoryManager::setMaxRecords(int count) {
 }
 
 void ConversionHistoryManager::save(bool synchronous) {
+    QMutexLocker submission(&m_submissionMutex);
     QList<HistoryRecord> recordsCopy;
     {
         QMutexLocker locker(&m_mutex);
@@ -124,9 +144,9 @@ void ConversionHistoryManager::save(bool synchronous) {
     }
 
     const QString path = historyFilePath();
-    auto saveTask = [records = std::move(recordsCopy), path]() {
+    auto saveTask = [this, records = std::move(recordsCopy), path]() {
         QJsonArray array;
-        for (const auto& rec : records) {
+        for (const auto &rec : records) {
             QJsonObject obj;
             obj["id"] = rec.id;
             obj["primaryInputPath"] = rec.primaryInputPath;
@@ -143,15 +163,24 @@ void ConversionHistoryManager::save(bool synchronous) {
             obj["diagnosticOutput"] = rec.diagnosticOutput;
             obj["timestamp"] = rec.timestamp.toString(Qt::ISODate);
             obj["durationMs"] = rec.durationMs;
+            obj["speed"] = rec.speed;
+            obj["etaSeconds"] = rec.etaSeconds;
+            obj["retryCount"] = rec.retryCount;
             obj["options"] = QJsonObject::fromVariantMap(rec.options);
             array.append(obj);
         }
 
         QSaveFile file(path);
-        if (file.open(QIODevice::WriteOnly)) {
-            file.write(QJsonDocument(array).toJson(QJsonDocument::Compact));
-            file.commit();
+        QString error;
+        if (!file.open(QIODevice::WriteOnly))
+            error = file.errorString();
+        else {
+            const auto data = QJsonDocument(array).toJson(QJsonDocument::Compact);
+            if (file.write(data) != data.size() || !file.commit())
+                error = file.errorString();
         }
+        QMutexLocker lock(&m_mutex);
+        m_storageError = error;
     };
 
     m_writerPool.start(saveTask);
@@ -161,7 +190,8 @@ void ConversionHistoryManager::save(bool synchronous) {
 }
 
 void ConversionHistoryManager::load() {
-    m_writerPool.waitForDone(1000);
+    QMutexLocker submission(&m_submissionMutex);
+    m_writerPool.waitForDone();
     QMutexLocker locker(&m_mutex);
     m_records.clear();
 
@@ -172,11 +202,13 @@ void ConversionHistoryManager::load() {
 
     const QByteArray data = file.readAll();
     const QJsonDocument doc = QJsonDocument::fromJson(data);
-    if (!doc.isArray()) return;
+    if (!doc.isArray())
+        return;
 
     const QJsonArray array = doc.array();
-    for (const auto& val : array) {
-        if (!val.isObject()) continue;
+    for (const auto &val : array) {
+        if (!val.isObject())
+            continue;
         const QJsonObject obj = val.toObject();
 
         HistoryRecord rec;
@@ -203,6 +235,9 @@ void ConversionHistoryManager::load() {
             rec.timestamp = QDateTime::currentDateTime();
         }
         rec.durationMs = obj["durationMs"].toInteger();
+        rec.speed = obj["speed"].toDouble(0);
+        rec.etaSeconds = obj["etaSeconds"].toInteger(-1);
+        rec.retryCount = obj["retryCount"].toInt(0);
         rec.options = obj["options"].toObject().toVariantMap();
 
         m_records.append(rec);

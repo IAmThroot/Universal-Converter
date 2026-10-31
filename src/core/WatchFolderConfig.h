@@ -8,18 +8,14 @@
 
 namespace uc::core {
 
-enum class WatchPostAction {
-    KeepOriginal,
-    MoveToProcessed,
-    DeleteOriginal
-};
+enum class WatchPostAction { KeepOriginal, MoveToProcessed, DeleteOriginal };
 
 struct WatchFolderConfig {
     QString id;
     QString folderPath;
     QString targetFormatId;
     QString presetId;
-    WatchPostAction postAction{WatchPostAction::MoveToProcessed};
+    WatchPostAction postAction{WatchPostAction::KeepOriginal};
     QString destinationFolder; // If empty, uses folderPath + "/converted"
     bool isRecursive{false};
     bool isEnabled{true};
@@ -39,7 +35,7 @@ struct WatchFolderConfig {
         return obj;
     }
 
-    static WatchFolderConfig fromJson(const QJsonObject& obj) {
+    static WatchFolderConfig fromJson(const QJsonObject &obj) {
         WatchFolderConfig cfg;
         cfg.id = obj["id"].toString();
         cfg.folderPath = obj["folderPath"].toString();

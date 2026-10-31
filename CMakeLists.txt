@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 project(UniversalConverter
-    VERSION 1.1.5
+    VERSION 1.1.6
     DESCRIPTION "High-performance, standalone, offline cross-platform media and document converter"
     LANGUAGES CXX
 )
@@ -47,6 +47,8 @@ set(CORE_SOURCES
     src/app/EngineResolver.h
     src/app/ToolchainManager.cpp
     src/app/ToolchainManager.h
+    src/core/JobFactory.cpp
+    src/core/JobFactory.h
     src/core/ConversionJob.cpp
     src/core/ConversionJob.h
     src/core/FormatRegistry.cpp
@@ -127,6 +129,7 @@ if(ENABLE_SANITIZERS)
 endif()
 
 if(MSVC)
+    target_compile_options(converter_core PUBLIC /utf-8)
     target_compile_options(converter_core PRIVATE /W4 /permissive-)
 else()
     target_compile_options(converter_core PRIVATE -Wall -Wextra -Wpedantic)
@@ -139,6 +142,10 @@ set(APP_SOURCES
     src/main.cpp
     src/app/Application.cpp
     src/app/Application.h
+    src/ui/WatchFoldersDialog.cpp
+    src/ui/WatchFoldersDialog.h
+    src/ui/BatchSetupDialog.cpp
+    src/ui/BatchSetupDialog.h
     src/ui/MainWindow.cpp
     src/ui/MainWindow.h
     src/ui/DropZoneWidget.cpp
@@ -177,6 +184,8 @@ add_executable(UniversalConverter WIN32
 set_target_properties(UniversalConverter PROPERTIES
     WIN32_EXECUTABLE TRUE
 )
+
+target_compile_definitions(UniversalConverter PRIVATE UC_VERSION="${PROJECT_VERSION}")
 
 target_include_directories(UniversalConverter PRIVATE
     src
@@ -225,6 +234,13 @@ if(BUILD_TESTING)
     endif()
 
     add_test(NAME tst_core COMMAND tst_core)
+    set(UI_TEST_SOURCES ${APP_SOURCES})
+    list(REMOVE_ITEM UI_TEST_SOURCES src/main.cpp src/app/Application.cpp src/app/Application.h)
+    add_executable(tst_ui tests/tst_ui.cpp ${UI_TEST_SOURCES} ${APP_RESOURCES})
+    target_link_libraries(tst_ui PRIVATE converter_core Qt6::Widgets Qt6::Test)
+    target_compile_definitions(tst_ui PRIVATE UC_VERSION="${PROJECT_VERSION}")
+    add_test(NAME tst_ui COMMAND tst_ui)
+    set_tests_properties(tst_ui PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
 # ==========================================

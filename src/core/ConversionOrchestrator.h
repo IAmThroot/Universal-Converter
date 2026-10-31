@@ -8,18 +8,18 @@
 #include "ProcessRunner.h"
 
 namespace uc::engines {
-    class FfmpegEngine;
-    class ImageMagickEngine;
-    class PandocEngine;
-}
+class FfmpegEngine;
+class ImageMagickEngine;
+class PandocEngine;
+} // namespace uc::engines
 
 namespace uc::core {
 
 class ConversionOrchestrator : public QObject {
     Q_OBJECT
 
-public:
-    explicit ConversionOrchestrator(int maxConcurrency = 4, QObject* parent = nullptr);
+  public:
+    explicit ConversionOrchestrator(int maxConcurrency = 4, QObject *parent = nullptr);
     ~ConversionOrchestrator() override;
 
     void setFfmpegEngine(std::shared_ptr<engines::FfmpegEngine> engine);
@@ -43,13 +43,15 @@ public:
 
     // Queue Management
     void addJob(std::shared_ptr<ConversionJob> job);
-    void cancelJob(const QString& jobId);
+    void cancelJob(const QString &jobId);
     void cancelAllJobs();
-    void removeJob(const QString& jobId);
+    void shutdown();
+    QString summary() const;
+    void removeJob(const QString &jobId);
     void clearCompletedJobs();
 
     // Inspection
-    std::shared_ptr<ConversionJob> findJob(const QString& jobId) const;
+    std::shared_ptr<ConversionJob> findJob(const QString &jobId) const;
     QList<std::shared_ptr<ConversionJob>> allJobs() const;
     QList<std::shared_ptr<ConversionJob>> queuedJobs() const;
     QList<std::shared_ptr<ConversionJob>> activeJobs() const;
@@ -58,22 +60,23 @@ public:
     int activeJobCount() const { return m_runningJobs.size(); }
     int totalJobCount() const { return m_jobs.size(); }
 
-signals:
-    void jobAdded(const QString& jobId);
-    void jobStarted(const QString& jobId);
-    void jobProgressChanged(const QString& jobId, int progress, const QString& statusMessage);
-    void jobStateChanged(const QString& jobId, JobState state, const QString& message);
-    void jobFinished(const QString& jobId, JobState state);
-    void jobRemoved(const QString& jobId);
+  signals:
+    void jobAdded(const QString &jobId);
+    void jobStarted(const QString &jobId);
+    void jobProgressChanged(const QString &jobId, int progress, const QString &statusMessage);
+    void jobStateChanged(const QString &jobId, JobState state, const QString &message);
+    void jobFinished(const QString &jobId, JobState state);
+    void jobRemoved(const QString &jobId);
     void queueDrained();
 
-private slots:
+  private slots:
     void pumpQueue();
 
-private:
-    void onJobFinishedInternal(const QString& jobId, JobState finalState);
-    bool isTransientError(const QString& errorMsg, const QString& diagnostic) const;
+  private:
+    void onJobFinishedInternal(const QString &jobId, JobState finalState);
+    bool isTransientError(const QString &errorMsg, const QString &diagnostic) const;
 
+    bool m_stopping{false};
     int m_maxConcurrency{4};
     int m_maxFfmpegConcurrency{2};
     int m_maxImageMagickConcurrency{4};

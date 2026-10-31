@@ -26,31 +26,40 @@ struct HistoryRecord {
     QString diagnosticOutput;
     QDateTime timestamp;
     qint64 durationMs{0};
+    double speed{0};
+    qint64 etaSeconds{-1};
+    int retryCount{0};
     QVariantMap options;
 };
 
 class ConversionHistoryManager {
-public:
-    static ConversionHistoryManager& instance();
+  public:
+    static ConversionHistoryManager &instance();
 
-    void recordJob(const ConversionJob* job, qint64 durationMs = 0);
+    void recordJob(const ConversionJob *job, qint64 durationMs = 0);
     QList<HistoryRecord> records() const;
     void clearHistory();
-    void removeRecord(const QString& id);
+    void removeRecord(const QString &id);
 
     int maxRecords() const { return m_maxRecords; }
     void setMaxRecords(int count);
 
     void save(bool synchronous = false);
     void load();
+    QString storageError() const {
+        QMutexLocker lock(&m_mutex);
+        return m_storageError;
+    }
 
-private:
+  private:
     ConversionHistoryManager();
     ~ConversionHistoryManager();
 
     QString historyFilePath() const;
 
     mutable QMutex m_mutex;
+    QMutex m_submissionMutex;
+    QString m_storageError;
     QList<HistoryRecord> m_records;
     int m_maxRecords{200};
     QThreadPool m_writerPool;

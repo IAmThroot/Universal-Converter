@@ -1,4 +1,5 @@
 #pragma once
+#include <memory>
 
 #include <QString>
 #include <QSettings>
@@ -7,15 +8,11 @@
 
 namespace uc::app {
 
-enum class DestinationMode {
-    SameAsSource,
-    SourceConvertedSubfolder,
-    CustomFolder
-};
+enum class DestinationMode { SameAsSource, SourceConvertedSubfolder, CustomFolder };
 
 class AppSettings {
-public:
-    static AppSettings& instance();
+  public:
+    static AppSettings &instance();
 
     // General
     int maxConcurrentJobs() const;
@@ -28,32 +25,32 @@ public:
     void setDestinationMode(DestinationMode mode);
 
     QString customDestinationPath() const;
-    void setCustomDestinationPath(const QString& path);
+    void setCustomDestinationPath(const QString &path);
 
     // Toolchain paths
     QString ffmpegPathOverride() const;
-    void setFfmpegPathOverride(const QString& path);
+    void setFfmpegPathOverride(const QString &path);
 
     QString magickPathOverride() const;
-    void setMagickPathOverride(const QString& path);
+    void setMagickPathOverride(const QString &path);
 
     QString pandocPathOverride() const;
-    void setPandocPathOverride(const QString& path);
+    void setPandocPathOverride(const QString &path);
 
     // Watch Folders
     QString watchFoldersJson() const;
-    void setWatchFoldersJson(const QString& json);
+    void setWatchFoldersJson(const QString &json);
 
     void sync();
 
-private:
+  private:
     AppSettings();
     ~AppSettings() = default;
 
-    AppSettings(const AppSettings&) = delete;
-    AppSettings& operator=(const AppSettings&) = delete;
+    AppSettings(const AppSettings &) = delete;
+    AppSettings &operator=(const AppSettings &) = delete;
 
-    QSettings m_settings;
+    std::unique_ptr<QSettings> m_settings;
 };
 
 } // namespace uc::app

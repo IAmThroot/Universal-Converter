@@ -7,17 +7,19 @@
 
 namespace uc::core {
 
-static QMutex s_reservedMutex;
+static QRecursiveMutex s_reservedMutex;
 static QSet<QString> s_reservedPaths;
 
-void OutputPathPlanner::reservePath(const QString& path) {
-    if (path.isEmpty()) return;
+void OutputPathPlanner::reservePath(const QString &path) {
+    if (path.isEmpty())
+        return;
     QMutexLocker locker(&s_reservedMutex);
     s_reservedPaths.insert(path);
 }
 
-void OutputPathPlanner::releasePath(const QString& path) {
-    if (path.isEmpty()) return;
+void OutputPathPlanner::releasePath(const QString &path) {
+    if (path.isEmpty())
+        return;
     QMutexLocker locker(&s_reservedMutex);
     s_reservedPaths.remove(path);
 }
@@ -27,7 +29,7 @@ void OutputPathPlanner::clearReservedPaths() {
     s_reservedPaths.clear();
 }
 
-QString OutputPathPlanner::resolveUniquePath(const QString& targetFilePath) {
+QString OutputPathPlanner::resolveUniquePath(const QString &targetFilePath) {
     {
         QMutexLocker locker(&s_reservedMutex);
         if (!QFile::exists(targetFilePath) && !s_reservedPaths.contains(targetFilePath)) {
@@ -42,8 +44,9 @@ QString OutputPathPlanner::resolveUniquePath(const QString& targetFilePath) {
 
     constexpr int maxDisambiguationAttempts = 10000;
     for (int counter = 1; counter <= maxDisambiguationAttempts; ++counter) {
-        const QString candidate = QString("%1/%2_%3%4")
-                                      .arg(dir, baseName, QString::number(counter), ext.isEmpty() ? "" : "." + ext);
+        const QString candidate =
+            QString("%1/%2_%3%4")
+                .arg(dir, baseName, QString::number(counter), ext.isEmpty() ? "" : "." + ext);
         QMutexLocker locker(&s_reservedMutex);
         if (!QFile::exists(candidate) && !s_reservedPaths.contains(candidate)) {
             return candidate;
@@ -52,27 +55,24 @@ QString OutputPathPlanner::resolveUniquePath(const QString& targetFilePath) {
 
     // Fallback using random UUID suffix if filesystem collision persists
     return QString("%1/%2_%3%4")
-        .arg(dir, baseName, QUuid::createUuid().toString(QUuid::WithoutBraces).left(8), ext.isEmpty() ? "" : "." + ext);
+        .arg(dir, baseName, QUuid::createUuid().toString(QUuid::WithoutBraces).left(8),
+             ext.isEmpty() ? "" : "." + ext);
 }
 
-QString OutputPathPlanner::generateTemporaryOutputPath(const QString& finalOutputPath) {
+QString OutputPathPlanner::generateTemporaryOutputPath(const QString &finalOutputPath) {
     if (finalOutputPath.trimmed().isEmpty()) {
         return QString();
     }
     const QFileInfo fi(finalOutputPath);
     const QString tempFileName = QString(".tmp_%1_%2.%3")
                                      .arg(QUuid::createUuid().toString(QUuid::WithoutBraces).left(8),
-                                          fi.completeBaseName(),
-                                          fi.suffix());
+                                          fi.completeBaseName(), fi.suffix());
     return QDir(fi.absolutePath()).filePath(tempFileName);
 }
 
-PathPlanResult OutputPathPlanner::planOutputPath(const QString& inputFilePath,
-                                                 const QString& outputFormatId,
+PathPlanResult OutputPathPlanner::planOutputPath(const QString &inputFilePath, const QString &outputFormatId,
                                                  app::DestinationMode mode,
-                                                 const QString& customDirectoryPath,
-                                                 CollisionPolicy policy)
-{
+                                                 const QString &customDirectoryPath, CollisionPolicy policy) {
     PathPlanResult res;
 
     if (inputFilePath.trimmed().isEmpty()) {
@@ -89,21 +89,21 @@ PathPlanResult OutputPathPlanner::planOutputPath(const QString& inputFilePath,
     // Determine target directory
     QString targetDir;
     switch (mode) {
-        case app::DestinationMode::SameAsSource:
-            targetDir = inputInfo.absolutePath();
-            break;
+    case app::DestinationMode::SameAsSource:
+        targetDir = inputInfo.absolutePath();
+        break;
 
-        case app::DestinationMode::SourceConvertedSubfolder:
-            targetDir = QDir(inputInfo.absolutePath()).filePath("Converted");
-            break;
+    case app::DestinationMode::SourceConvertedSubfolder:
+        targetDir = QDir(inputInfo.absolutePath()).filePath("Converted");
+        break;
 
-        case app::DestinationMode::CustomFolder:
-            if (customDirectoryPath.trimmed().isEmpty()) {
-                res.errorMessage = "Custom destination directory is not specified.";
-                return res;
-            }
-            targetDir = customDirectoryPath;
-            break;
+    case app::DestinationMode::CustomFolder:
+        if (customDirectoryPath.trimmed().isEmpty()) {
+            res.errorMessage = "Custom destination directory is not specified.";
+            return res;
+        }
+        targetDir = customDirectoryPath;
+        break;
     }
 
     // Ensure target directory exists or can be created
@@ -118,7 +118,7 @@ PathPlanResult OutputPathPlanner::planOutputPath(const QString& inputFilePath,
     res.targetDirectory = dir.absolutePath();
 
     // Determine target extension (sanitized against path traversal)
-    const auto* fmt = FormatRegistry::instance().findById(outputFormatId);
+    const auto *fmt = FormatRegistry::instance().findById(outputFormatId);
     const QString rawExt = fmt ? fmt->defaultExtension : outputFormatId;
     const QString ext = sanitizeExtension(rawExt);
 
@@ -133,9 +133,8 @@ PathPlanResult OutputPathPlanner::planOutputPath(const QString& inputFilePath,
     const QString proposedCanon = proposedInfo.canonicalFilePath().isEmpty()
                                       ? proposedInfo.absoluteFilePath()
                                       : proposedInfo.canonicalFilePath();
-    const QString sourceCanon = inputInfo.canonicalFilePath().isEmpty()
-                                    ? inputInfo.absoluteFilePath()
-                                    : inputInfo.canonicalFilePath();
+    const QString sourceCanon = inputInfo.canonicalFilePath().isEmpty() ? inputInfo.absoluteFilePath()
+                                                                        : inputInfo.canonicalFilePath();
 #ifdef Q_OS_WIN
     const bool isSameAsSource = (proposedCanon.compare(sourceCanon, Qt::CaseInsensitive) == 0);
 #else
@@ -148,7 +147,8 @@ PathPlanResult OutputPathPlanner::planOutputPath(const QString& inputFilePath,
 #endif
 
     if (policy == CollisionPolicy::Skip && QFile::exists(proposedPath)) {
-        res.errorMessage = QString("Destination file already exists and policy is Skip: %1").arg(proposedPath);
+        res.errorMessage =
+            QString("Destination file already exists and policy is Skip: %1").arg(proposedPath);
         return res;
     }
 
@@ -159,6 +159,7 @@ PathPlanResult OutputPathPlanner::planOutputPath(const QString& inputFilePath,
         }
         res.finalFilePath = proposedPath;
     } else { // GenerateUniqueName
+        QMutexLocker reservationLock(&s_reservedMutex);
         res.finalFilePath = resolveUniquePath(proposedPath);
         reservePath(res.finalFilePath);
     }
@@ -167,29 +168,43 @@ PathPlanResult OutputPathPlanner::planOutputPath(const QString& inputFilePath,
     return res;
 }
 
-bool OutputPathPlanner::publishTempToFinal(const QString& tempPath, const QString& finalPath,
-                                           QString* errorMessage) {
+bool OutputPathPlanner::publishTempToFinal(const QString &tempPath, const QString &finalPath,
+                                           QString *errorMessage, CollisionPolicy policy) {
     if (tempPath.isEmpty() || finalPath.isEmpty()) {
         releasePath(finalPath);
-        if (errorMessage) *errorMessage = "Temporary or final output path is empty.";
+        if (errorMessage)
+            *errorMessage = "Temporary or final output path is empty.";
         return false;
     }
     if (!QFile::exists(tempPath)) {
         releasePath(finalPath);
-        if (errorMessage) *errorMessage = QString("Temporary file missing: %1").arg(tempPath);
+        if (errorMessage)
+            *errorMessage = QString("Temporary file missing: %1").arg(tempPath);
         return false;
     }
 
-    // Target exists or was created concurrently: move it aside first.
-    const QString backupPath = finalPath + QString(".bak_%1")
-                                   .arg(QUuid::createUuid().toString(QUuid::WithoutBraces).left(8));
+    if (policy != CollisionPolicy::Overwrite) {
+        // QFile::rename refuses to replace an existing destination.
+        const bool ok = QFile::rename(tempPath, finalPath);
+        if (!ok) {
+            if (errorMessage)
+                *errorMessage = "Output appeared or could not be published; existing file preserved.";
+            QFile::remove(tempPath);
+        }
+        releasePath(finalPath);
+        return ok;
+    }
+    // Explicit overwrite only: move existing destination aside first.
+    const QString backupPath =
+        finalPath + QString(".bak_%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces).left(8));
     bool hadExisting = false;
     if (QFile::exists(finalPath)) {
         hadExisting = true;
         if (!QFile::rename(finalPath, backupPath)) {
             releasePath(finalPath);
             if (errorMessage) {
-                *errorMessage = QString("Failed to back up existing file prior to publish: %1").arg(finalPath);
+                *errorMessage =
+                    QString("Failed to back up existing file prior to publish: %1").arg(finalPath);
             }
             return false;
         }
@@ -215,32 +230,37 @@ bool OutputPathPlanner::publishTempToFinal(const QString& tempPath, const QStrin
     return false;
 }
 
-QString OutputPathPlanner::sanitizeExtension(const QString& rawExtension) {
+QString OutputPathPlanner::sanitizeExtension(const QString &rawExtension) {
     QString ext = rawExtension.trimmed().toLower();
     // Strip leading dots and path components; keep only safe chars.
-    while (ext.startsWith('.')) ext.remove(0, 1);
+    while (ext.startsWith('.'))
+        ext.remove(0, 1);
     const int slash = qMax(ext.lastIndexOf('/'), ext.lastIndexOf('\\'));
-    if (slash >= 0) ext = ext.mid(slash + 1);
+    if (slash >= 0)
+        ext = ext.mid(slash + 1);
     QString clean;
     clean.reserve(ext.size());
     for (const QChar c : ext) {
-        if (c.isLetterOrNumber()) clean.append(c);
+        if (c.isLetterOrNumber())
+            clean.append(c);
     }
-    if (clean.isEmpty()) clean = QStringLiteral("bin");
+    if (clean.isEmpty())
+        clean = QStringLiteral("bin");
     return clean.left(16);
 }
 
-bool OutputPathPlanner::validateProducedFile(const QString& path, qint64 minBytes,
-                                            QString* errorMessage) {
+bool OutputPathPlanner::validateProducedFile(const QString &path, qint64 minBytes, QString *errorMessage) {
     const QFileInfo fi(path);
     if (!fi.exists() || !fi.isFile()) {
-        if (errorMessage) *errorMessage = QString("Output file does not exist: %1").arg(path);
+        if (errorMessage)
+            *errorMessage = QString("Output file does not exist: %1").arg(path);
         return false;
     }
     if (fi.size() < minBytes) {
         if (errorMessage) {
             *errorMessage = QString("Conversion failed to produce a valid file (%1 bytes, minimum %2).")
-                                .arg(fi.size()).arg(minBytes);
+                                .arg(fi.size())
+                                .arg(minBytes);
         }
         return false;
     }

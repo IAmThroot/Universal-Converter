@@ -1,5 +1,6 @@
 #include "PresetRegistry.h"
 #include <QStandardPaths>
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
@@ -8,7 +9,7 @@
 
 namespace uc::core {
 
-PresetRegistry& PresetRegistry::instance() {
+PresetRegistry &PresetRegistry::instance() {
     static PresetRegistry s_instance;
     return s_instance;
 }
@@ -73,10 +74,7 @@ void PresetRegistry::registerBuiltInPresets() {
         p.category = PresetCategory::AudioLossless;
         p.sourceCategory = MediaCategory::Audio;
         p.targetFormatId = "flac";
-        p.options = {
-            {"customAudioCodec", "flac"},
-            {"customAudioBitrateKbps", 0}
-        };
+        p.options = {{"customAudioCodec", "flac"}, {"customAudioBitrateKbps", 0}};
         m_presets.append(p);
     }
 
@@ -89,10 +87,7 @@ void PresetRegistry::registerBuiltInPresets() {
         p.category = PresetCategory::WebAndSocial;
         p.sourceCategory = MediaCategory::Audio;
         p.targetFormatId = "mp3";
-        p.options = {
-            {"customAudioCodec", "libmp3lame"},
-            {"customAudioBitrateKbps", 320}
-        };
+        p.options = {{"customAudioCodec", "libmp3lame"}, {"customAudioBitrateKbps", 320}};
         m_presets.append(p);
     }
 
@@ -105,11 +100,7 @@ void PresetRegistry::registerBuiltInPresets() {
         p.category = PresetCategory::WebAndSocial;
         p.sourceCategory = MediaCategory::Image;
         p.targetFormatId = "webp";
-        p.options = {
-            {"quality", 82},
-            {"stripMetadata", true},
-            {"autoOrient", true}
-        };
+        p.options = {{"quality", 82}, {"stripMetadata", true}, {"autoOrient", true}};
         m_presets.append(p);
     }
 
@@ -122,10 +113,7 @@ void PresetRegistry::registerBuiltInPresets() {
         p.category = PresetCategory::WebAndSocial;
         p.sourceCategory = MediaCategory::Image;
         p.targetFormatId = "png";
-        p.options = {
-            {"quality", 100},
-            {"stripMetadata", false}
-        };
+        p.options = {{"quality", 100}, {"stripMetadata", false}};
         m_presets.append(p);
     }
 
@@ -138,10 +126,7 @@ void PresetRegistry::registerBuiltInPresets() {
         p.category = PresetCategory::DocumentPublishing;
         p.sourceCategory = MediaCategory::Document;
         p.targetFormatId = "pdf";
-        p.options = {
-            {"toc", false},
-            {"standalone", true}
-        };
+        p.options = {{"toc", false}, {"standalone", true}};
         m_presets.append(p);
     }
 
@@ -150,14 +135,12 @@ void PresetRegistry::registerBuiltInPresets() {
         ConversionPreset p;
         p.id = "video_to_gif";
         p.name = "High-Quality Animated GIF";
-        p.description = "Convert video to animated GIF with dual-pass palette generation and 15 fps rate limit";
+        p.description =
+            "Convert video to animated GIF with dual-pass palette generation and 15 fps rate limit";
         p.category = PresetCategory::WebAndSocial;
         p.sourceCategory = MediaCategory::Video;
         p.targetFormatId = "gif";
-        p.options = {
-            {"customFps", 15},
-            {"customWidth", 480}
-        };
+        p.options = {{"customFps", 15}, {"customWidth", 480}};
         m_presets.append(p);
     }
 
@@ -170,9 +153,7 @@ void PresetRegistry::registerBuiltInPresets() {
         p.category = PresetCategory::WebAndSocial;
         p.sourceCategory = MediaCategory::Video;
         p.targetFormatId = "webp";
-        p.options = {
-            {"customFps", 20}
-        };
+        p.options = {{"customFps", 20}};
         m_presets.append(p);
     }
 
@@ -185,20 +166,16 @@ void PresetRegistry::registerBuiltInPresets() {
         p.category = PresetCategory::WebAndSocial;
         p.sourceCategory = MediaCategory::Video;
         p.targetFormatId = "avif";
-        p.options = {
-            {"customFps", 24}
-        };
+        p.options = {{"customFps", 24}};
         m_presets.append(p);
     }
 }
 
-QList<ConversionPreset> PresetRegistry::allPresets() const {
-    return m_presets;
-}
+QList<ConversionPreset> PresetRegistry::allPresets() const { return m_presets; }
 
 QList<ConversionPreset> PresetRegistry::presetsForCategory(MediaCategory cat) const {
     QList<ConversionPreset> filtered;
-    for (const auto& p : m_presets) {
+    for (const auto &p : m_presets) {
         if (p.appliesTo(cat)) {
             filtered.append(p);
         }
@@ -206,8 +183,8 @@ QList<ConversionPreset> PresetRegistry::presetsForCategory(MediaCategory cat) co
     return filtered;
 }
 
-const ConversionPreset* PresetRegistry::findById(const QString& id) const {
-    for (const auto& p : m_presets) {
+const ConversionPreset *PresetRegistry::findById(const QString &id) const {
+    for (const auto &p : m_presets) {
         if (p.id == id) {
             return &p;
         }
@@ -215,19 +192,21 @@ const ConversionPreset* PresetRegistry::findById(const QString& id) const {
     return nullptr;
 }
 
-void PresetRegistry::registerCustomPreset(const ConversionPreset& preset, bool autoSave) {
+void PresetRegistry::registerCustomPreset(const ConversionPreset &preset, bool autoSave) {
     for (int i = 0; i < m_presets.size(); ++i) {
         if (m_presets[i].id == preset.id) {
             m_presets[i] = preset;
-            if (autoSave) saveCustomPresets();
+            if (autoSave)
+                saveCustomPresets();
             return;
         }
     }
     m_presets.append(preset);
-    if (autoSave) saveCustomPresets();
+    if (autoSave)
+        saveCustomPresets();
 }
 
-bool PresetRegistry::removeCustomPreset(const QString& id) {
+bool PresetRegistry::removeCustomPreset(const QString &id) {
     for (int i = 0; i < m_presets.size(); ++i) {
         if (m_presets[i].id == id && !m_presets[i].isBuiltIn) {
             m_presets.removeAt(i);
@@ -239,7 +218,11 @@ bool PresetRegistry::removeCustomPreset(const QString& id) {
 }
 
 QString PresetRegistry::customPresetsFilePath() const {
-    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    const QString dir =
+        (QCoreApplication::instance() &&
+                 !QCoreApplication::instance()->property("testDataDirectory").toString().isEmpty()
+             ? QCoreApplication::instance()->property("testDataDirectory").toString()
+             : QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
     QDir().mkpath(dir);
     return QDir(dir).filePath("custom_presets.json");
 }
@@ -247,7 +230,8 @@ QString PresetRegistry::customPresetsFilePath() const {
 void PresetRegistry::loadCustomPresets() {
     const QString path = customPresetsFilePath();
     QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) return;
+    if (!file.open(QIODevice::ReadOnly))
+        return;
 
     const QByteArray data = file.readAll();
     file.close();
@@ -259,7 +243,8 @@ void PresetRegistry::saveCustomPresets() {
     const QString json = exportProfilesToJson();
     const QString path = customPresetsFilePath();
     QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) return;
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
+        return;
 
     file.write(json.toUtf8());
     file.close();
@@ -267,8 +252,9 @@ void PresetRegistry::saveCustomPresets() {
 
 QString PresetRegistry::exportProfilesToJson() const {
     QJsonArray arr;
-    for (const auto& p : m_presets) {
-        if (p.isBuiltIn) continue; // Only export user-authored profiles
+    for (const auto &p : m_presets) {
+        if (p.isBuiltIn)
+            continue; // Only export user-authored profiles
 
         QJsonObject obj;
         obj["id"] = p.id;
@@ -284,25 +270,28 @@ QString PresetRegistry::exportProfilesToJson() const {
     return QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Indented));
 }
 
-bool PresetRegistry::importProfilesFromJson(const QString& jsonString, QString* errorMessage) {
+bool PresetRegistry::importProfilesFromJson(const QString &jsonString, QString *errorMessage) {
     QJsonParseError err;
     const auto doc = QJsonDocument::fromJson(jsonString.toUtf8(), &err);
     if (doc.isNull() || !doc.isArray()) {
-        if (errorMessage) *errorMessage = QString("Invalid JSON format: %1").arg(err.errorString());
+        if (errorMessage)
+            *errorMessage = QString("Invalid JSON format: %1").arg(err.errorString());
         return false;
     }
 
     const auto arr = doc.array();
     bool anyAdded = false;
-    for (const auto& item : arr) {
-        if (!item.isObject()) continue;
+    for (const auto &item : arr) {
+        if (!item.isObject())
+            continue;
         const auto obj = item.toObject();
 
         ConversionPreset p;
         p.id = obj["id"].toString();
         p.name = obj["name"].toString();
         p.description = obj["description"].toString();
-        p.category = static_cast<PresetCategory>(obj["category"].toInt(static_cast<int>(PresetCategory::Custom)));
+        p.category =
+            static_cast<PresetCategory>(obj["category"].toInt(static_cast<int>(PresetCategory::Custom)));
         p.sourceCategory = static_cast<MediaCategory>(obj["sourceCategory"].toInt());
         p.targetFormatId = obj["targetFormatId"].toString();
         p.options = obj["options"].toObject().toVariantMap();

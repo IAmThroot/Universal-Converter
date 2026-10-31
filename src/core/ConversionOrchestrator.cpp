@@ -1,6 +1,7 @@
 #include "ConversionOrchestrator.h"
 #include "ConversionHistoryManager.h"
 #include "OutputPathPlanner.h"
+#include "EngineCapabilityResolver.h"
 #include "../app/ToolchainManager.h"
 #include "../engines/FfmpegEngine.h"
 #include "../engines/ImageMagickEngine.h"
@@ -9,23 +10,19 @@
 
 namespace uc::core {
 
-ConversionOrchestrator::ConversionOrchestrator(int maxConcurrency, QObject* parent)
-    : QObject(parent)
-    , m_maxConcurrency(qMax(1, maxConcurrency))
-{
-    connect(&app::ToolchainManager::instance(), &app::ToolchainManager::toolchainStatusChanged,
-            this, &ConversionOrchestrator::pumpQueue);
+ConversionOrchestrator::ConversionOrchestrator(int maxConcurrency, QObject *parent)
+    : QObject(parent), m_maxConcurrency(qMax(1, maxConcurrency)) {
+    connect(&app::ToolchainManager::instance(), &app::ToolchainManager::toolchainStatusChanged, this,
+            &ConversionOrchestrator::pumpQueue);
 }
 
-ConversionOrchestrator::~ConversionOrchestrator() {
-    cancelAllJobs();
-}
+ConversionOrchestrator::~ConversionOrchestrator() { shutdown(); }
 
 void ConversionOrchestrator::setFfmpegEngine(std::shared_ptr<engines::FfmpegEngine> engine) {
     m_ffmpegEngine = engine;
     if (m_ffmpegEngine) {
         connect(m_ffmpegEngine.get(), &engines::FfmpegEngine::jobFinished, this,
-                [this](const QString& jobId, bool success, const QString& /*msg*/) {
+                [this](const QString &jobId, bool success, const QString & /*msg*/) {
                     auto job = findJob(jobId);
                     JobState state = (job && job->state() == JobState::Cancelled)
                                          ? JobState::Cancelled
@@ -39,7 +36,7 @@ void ConversionOrchestrator::setImageMagickEngine(std::shared_ptr<engines::Image
     m_imageMagickEngine = engine;
     if (m_imageMagickEngine) {
         connect(m_imageMagickEngine.get(), &engines::ImageMagickEngine::jobFinished, this,
-                [this](const QString& jobId, bool success, const QString& /*msg*/) {
+                [this](const QString &jobId, bool success, const QString & /*msg*/) {
                     auto job = findJob(jobId);
                     JobState state = (job && job->state() == JobState::Cancelled)
                                          ? JobState::Cancelled
@@ -53,7 +50,7 @@ void ConversionOrchestrator::setPandocEngine(std::shared_ptr<engines::PandocEngi
     m_pandocEngine = engine;
     if (m_pandocEngine) {
         connect(m_pandocEngine.get(), &engines::PandocEngine::jobFinished, this,
-                [this](const QString& jobId, bool success, const QString& /*msg*/) {
+                [this](const QString &jobId, bool success, const QString & /*msg*/) {
                     auto job = findJob(jobId);
                     JobState state = (job && job->state() == JobState::Cancelled)
                                          ? JobState::Cancelled
@@ -76,23 +73,25 @@ void ConversionOrchestrator::addJob(std::shared_ptr<ConversionJob> job) {
     m_jobs.append(job);
     m_jobMap.insert(job->id(), job);
 
-    connect(job.get(), &ConversionJob::cancellationRequested, this, [this, id = job->id()]() {
-        cancelJob(id);
-    });
-    connect(job.get(), &ConversionJob::progressChanged, this, [this, id = job->id()](int progress, const QString& msg) {
-        emit jobProgressChanged(id, progress, msg);
-    });
-    connect(job.get(), &ConversionJob::stateChanged, this, [this, id = job->id(), jobPtr = job.get()](JobState state, JobState /*oldState*/) {
-        emit jobStateChanged(id, state, jobPtr->statusMessage());
-    });
+    connect(job.get(), &ConversionJob::cancellationRequested, this,
+            [this, id = job->id()]() { cancelJob(id); });
+    connect(job.get(), &ConversionJob::progressChanged, this,
+            [this, id = job->id()](int progress, const QString &msg) {
+                emit jobProgressChanged(id, progress, msg);
+            });
+    connect(job.get(), &ConversionJob::stateChanged, this,
+            [this, id = job->id(), jobPtr = job.get()](JobState state, JobState /*oldState*/) {
+                emit jobStateChanged(id, state, jobPtr->statusMessage());
+            });
 
     emit jobAdded(job->id());
     pumpQueue();
 }
 
-void ConversionOrchestrator::cancelJob(const QString& jobId) {
+void ConversionOrchestrator::cancelJob(const QString &jobId) {
     auto job = findJob(jobId);
-    if (!job || job->isTerminal()) return;
+    if (!job || job->isTerminal())
+        return;
 
     if (m_runningJobs.contains(jobId)) {
         if (job->engine() == EngineType::FFmpeg && m_ffmpegEngine) {
@@ -113,17 +112,18 @@ void ConversionOrchestrator::cancelJob(const QString& jobId) {
 
 void ConversionOrchestrator::cancelAllJobs() {
     const auto jobIds = m_jobMap.keys();
-    for (const auto& id : jobIds) {
+    for (const auto &id : jobIds) {
         cancelJob(id);
     }
 }
 
-void ConversionOrchestrator::removeJob(const QString& jobId) {
+void ConversionOrchestrator::removeJob(const QString &jobId) {
     auto job = findJob(jobId);
-    if (job) {
-        OutputPathPlanner::releasePath(job->finalOutputPath());
-    }
     cancelJob(jobId);
+    if (job && !job->isTerminal())
+        return;
+    if (job)
+        OutputPathPlanner::releasePath(job->finalOutputPath());
 
     if (m_jobMap.contains(jobId)) {
         m_jobMap.remove(jobId);
@@ -139,28 +139,27 @@ void ConversionOrchestrator::removeJob(const QString& jobId) {
 
 void ConversionOrchestrator::clearCompletedJobs() {
     QList<QString> toRemove;
-    for (const auto& job : m_jobs) {
+    for (const auto &job : m_jobs) {
         if (job->isTerminal()) {
             toRemove.append(job->id());
         }
     }
-    for (const auto& id : toRemove) {
+    for (const auto &id : toRemove) {
         removeJob(id);
     }
 }
 
-std::shared_ptr<ConversionJob> ConversionOrchestrator::findJob(const QString& jobId) const {
+std::shared_ptr<ConversionJob> ConversionOrchestrator::findJob(const QString &jobId) const {
     return m_jobMap.value(jobId, nullptr);
 }
 
-QList<std::shared_ptr<ConversionJob>> ConversionOrchestrator::allJobs() const {
-    return m_jobs;
-}
+QList<std::shared_ptr<ConversionJob>> ConversionOrchestrator::allJobs() const { return m_jobs; }
 
 QList<std::shared_ptr<ConversionJob>> ConversionOrchestrator::queuedJobs() const {
     QList<std::shared_ptr<ConversionJob>> list;
-    for (const auto& j : m_jobs) {
-        if (j->state() == JobState::Queued) list.append(j);
+    for (const auto &j : m_jobs) {
+        if (j->state() == JobState::Queued)
+            list.append(j);
     }
     return list;
 }
@@ -171,15 +170,16 @@ QList<std::shared_ptr<ConversionJob>> ConversionOrchestrator::activeJobs() const
 
 QList<std::shared_ptr<ConversionJob>> ConversionOrchestrator::completedJobs() const {
     QList<std::shared_ptr<ConversionJob>> list;
-    for (const auto& j : m_jobs) {
-        if (j->isTerminal()) list.append(j);
+    for (const auto &j : m_jobs) {
+        if (j->isTerminal())
+            list.append(j);
     }
     return list;
 }
 
 int ConversionOrchestrator::activeJobsForEngine(EngineType engine) const {
     int count = 0;
-    for (const auto& job : m_runningJobs) {
+    for (const auto &job : m_runningJobs) {
         if (job->engine() == engine) {
             ++count;
         }
@@ -187,38 +187,67 @@ int ConversionOrchestrator::activeJobsForEngine(EngineType engine) const {
     return count;
 }
 
-bool ConversionOrchestrator::isTransientError(const QString& errorMsg, const QString& diagnostic) const {
+bool ConversionOrchestrator::isTransientError(const QString &errorMsg, const QString &diagnostic) const {
     const QString combined = (errorMsg + " " + diagnostic).toLower();
     // Transient indicators: OS file locks, out of memory spikes, busy temporary IO
     if (combined.contains("resource temporarily unavailable") ||
-        combined.contains("device or resource busy") ||
-        combined.contains("text file busy") ||
-        combined.contains("out of memory") ||
-        combined.contains("interrupted system call") ||
+        combined.contains("device or resource busy") || combined.contains("text file busy") ||
+        combined.contains("out of memory") || combined.contains("interrupted system call") ||
         combined.contains("sharing violation")) {
         return true;
     }
     return false;
 }
 
+void ConversionOrchestrator::shutdown() {
+    m_stopping = true;
+    cancelAllJobs();
+    if (m_ffmpegEngine)
+        m_ffmpegEngine->shutdown();
+    if (m_imageMagickEngine)
+        m_imageMagickEngine->shutdown();
+    if (m_pandocEngine)
+        m_pandocEngine->shutdown();
+}
+
+QString ConversionOrchestrator::summary() const {
+    int success = 0, failed = 0, cancelled = 0;
+    for (const auto &job : m_jobs) {
+        success += job->state() == JobState::Completed;
+        failed += job->state() == JobState::Failed;
+        cancelled += job->state() == JobState::Cancelled;
+    }
+    return QString("%1 succeeded · %2 failed · %3 cancelled · %4 active · %5 waiting")
+        .arg(success)
+        .arg(failed)
+        .arg(cancelled)
+        .arg(m_runningJobs.size())
+        .arg(queuedJobs().size());
+}
+
 void ConversionOrchestrator::pumpQueue() {
+    if (m_stopping)
+        return;
     if (app::ToolchainManager::instance().isScanning()) {
         return; // Defer launching jobs until toolchain scan completes
     }
 
     while (m_runningJobs.size() < m_maxConcurrency) {
         std::shared_ptr<ConversionJob> nextJob = nullptr;
-        for (const auto& j : m_jobs) {
+        for (const auto &j : m_jobs) {
             if (j->state() == JobState::Queued) {
                 // Check per-engine concurrency ceiling
                 const EngineType eng = j->engine();
-                if (eng == EngineType::FFmpeg && activeJobsForEngine(EngineType::FFmpeg) >= m_maxFfmpegConcurrency) {
+                if (eng == EngineType::FFmpeg &&
+                    activeJobsForEngine(EngineType::FFmpeg) >= m_maxFfmpegConcurrency) {
                     continue;
                 }
-                if (eng == EngineType::ImageMagick && activeJobsForEngine(EngineType::ImageMagick) >= m_maxImageMagickConcurrency) {
+                if (eng == EngineType::ImageMagick &&
+                    activeJobsForEngine(EngineType::ImageMagick) >= m_maxImageMagickConcurrency) {
                     continue;
                 }
-                if (eng == EngineType::Pandoc && activeJobsForEngine(EngineType::Pandoc) >= m_maxPandocConcurrency) {
+                if (eng == EngineType::Pandoc &&
+                    activeJobsForEngine(EngineType::Pandoc) >= m_maxPandocConcurrency) {
                     continue;
                 }
 
@@ -238,6 +267,13 @@ void ConversionOrchestrator::pumpQueue() {
         m_runningJobs.insert(nextJob->id(), nextJob);
         emit jobStarted(nextJob->id());
 
+        const auto route = EngineCapabilityResolver::instance().resolveRoute(
+            nextJob->inputFormatId(), nextJob->outputFormatId(), nextJob->options());
+        if (!route.available) {
+            nextJob->setError(route.reason);
+            onJobFinishedInternal(nextJob->id(), JobState::Failed);
+            continue;
+        }
         // Dispatch based on engine type
         if (nextJob->engine() == EngineType::FFmpeg) {
             if (m_ffmpegEngine) {
@@ -270,9 +306,8 @@ void ConversionOrchestrator::pumpQueue() {
                 onJobFinishedInternal(nextJob->id(), JobState::Failed);
             }
         } else {
-            nextJob->transitionTo(JobState::Queued, "Unknown or unsupported engine type");
-            m_runningJobs.remove(nextJob->id());
-            break;
+            nextJob->setError("Unknown or unsupported engine type");
+            onJobFinishedInternal(nextJob->id(), JobState::Failed);
         }
     }
 
@@ -281,7 +316,7 @@ void ConversionOrchestrator::pumpQueue() {
     }
 }
 
-void ConversionOrchestrator::onJobFinishedInternal(const QString& jobId, JobState finalState) {
+void ConversionOrchestrator::onJobFinishedInternal(const QString &jobId, JobState finalState) {
     auto job = findJob(jobId);
     if (!job) {
         m_runningJobs.remove(jobId);

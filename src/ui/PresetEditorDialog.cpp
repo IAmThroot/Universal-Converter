@@ -12,15 +12,10 @@
 namespace uc::ui {
 
 PresetEditorDialog::PresetEditorDialog(core::MediaCategory sourceCategory,
-                                       const core::ConversionPreset* existingPreset,
-                                       QWidget* parent)
-    : QDialog(parent)
-    , m_sourceCategory(sourceCategory)
-    , m_isEditMode(existingPreset != nullptr)
-{
+                                       const core::ConversionPreset *existingPreset, QWidget *parent)
+    : QDialog(parent), m_sourceCategory(sourceCategory), m_isEditMode(existingPreset != nullptr) {
     setWindowTitle(m_isEditMode ? "Edit Conversion Preset" : "Custom Preset Builder");
     setMinimumWidth(500);
-    setStyleSheet("background-color: #0f172a; color: #f8fafc;");
 
     setupUi();
 
@@ -32,12 +27,12 @@ PresetEditorDialog::PresetEditorDialog(core::MediaCategory sourceCategory,
 }
 
 void PresetEditorDialog::setupUi() {
-    auto* mainLayout = new QVBoxLayout(this);
+    auto *mainLayout = new QVBoxLayout(this);
     mainLayout->setSpacing(14);
 
     // --- Basic Metadata ---
-    auto* metaGroup = new QGroupBox("Preset Information", this);
-    auto* metaForm = new QFormLayout(metaGroup);
+    auto *metaGroup = new QGroupBox("Preset Information", this);
+    auto *metaForm = new QFormLayout(metaGroup);
 
     m_nameEdit = new QLineEdit(this);
     m_nameEdit->setPlaceholderText("e.g. My Custom 4K ProRes Profile");
@@ -55,7 +50,8 @@ void PresetEditorDialog::setupUi() {
     m_sourceCatCombo->addItem("Subtitle", static_cast<int>(core::MediaCategory::Subtitle));
 
     const int idx = m_sourceCatCombo->findData(static_cast<int>(m_sourceCategory));
-    if (idx >= 0) m_sourceCatCombo->setCurrentIndex(idx);
+    if (idx >= 0)
+        m_sourceCatCombo->setCurrentIndex(idx);
     metaForm->addRow("Source Category:", m_sourceCatCombo);
 
     m_targetFormatEdit = new QLineEdit(this);
@@ -66,7 +62,7 @@ void PresetEditorDialog::setupUi() {
 
     // --- Video/Audio Advanced Flags ---
     m_videoOptionsWidget = new QGroupBox("Video & Audio Transcode Flags", this);
-    auto* videoForm = new QFormLayout(m_videoOptionsWidget);
+    auto *videoForm = new QFormLayout(m_videoOptionsWidget);
 
     m_videoCodecEdit = new QLineEdit(this);
     m_videoCodecEdit->setPlaceholderText("e.g. libx264, libx265, libvpx-vp9, hevc_nvenc");
@@ -107,7 +103,7 @@ void PresetEditorDialog::setupUi() {
 
     // --- Image Options ---
     m_imageOptionsWidget = new QGroupBox("Image Optimization Flags", this);
-    auto* imgForm = new QFormLayout(m_imageOptionsWidget);
+    auto *imgForm = new QFormLayout(m_imageOptionsWidget);
 
     m_qualitySpin = new QSpinBox(this);
     m_qualitySpin->setRange(1, 100);
@@ -129,9 +125,9 @@ void PresetEditorDialog::setupUi() {
     mainLayout->addWidget(m_imageOptionsWidget);
 
     // Profile Import / Export Actions
-    auto* ioRow = new QHBoxLayout();
-    auto* expBtn = new QPushButton("Export Profiles to JSON...", this);
-    auto* impBtn = new QPushButton("Import Profiles from JSON...", this);
+    auto *ioRow = new QHBoxLayout();
+    auto *expBtn = new QPushButton("Export Profiles to JSON...", this);
+    auto *impBtn = new QPushButton("Import Profiles from JSON...", this);
     ioRow->addWidget(expBtn);
     ioRow->addWidget(impBtn);
     ioRow->addStretch();
@@ -141,13 +137,13 @@ void PresetEditorDialog::setupUi() {
     connect(impBtn, &QPushButton::clicked, this, &PresetEditorDialog::onImportClicked);
 
     // --- Dialog Buttons ---
-    auto* btnBox = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
+    auto *btnBox = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, this);
     connect(btnBox, &QDialogButtonBox::accepted, this, &PresetEditorDialog::onSaveClicked);
     connect(btnBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
     mainLayout->addWidget(btnBox);
 
-    connect(m_sourceCatCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &PresetEditorDialog::onCategoryChanged);
+    connect(m_sourceCatCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &PresetEditorDialog::onCategoryChanged);
 
     onCategoryChanged(m_sourceCatCombo->currentIndex());
 }
@@ -158,7 +154,7 @@ void PresetEditorDialog::onCategoryChanged(int idx) {
     m_imageOptionsWidget->setVisible(cat == core::MediaCategory::Image);
 }
 
-void PresetEditorDialog::loadFromPreset(const core::ConversionPreset& p) {
+void PresetEditorDialog::loadFromPreset(const core::ConversionPreset &p) {
     m_presetId = p.id;
     m_nameEdit->setText(p.name);
     m_descEdit->setText(p.description);
@@ -166,20 +162,31 @@ void PresetEditorDialog::loadFromPreset(const core::ConversionPreset& p) {
     m_existingOptions = p.options;
 
     const int idx = m_sourceCatCombo->findData(static_cast<int>(p.sourceCategory));
-    if (idx >= 0) m_sourceCatCombo->setCurrentIndex(idx);
+    if (idx >= 0)
+        m_sourceCatCombo->setCurrentIndex(idx);
 
     // Extract options
-    if (p.options.contains("customVideoCodec")) m_videoCodecEdit->setText(p.options["customVideoCodec"].toString());
-    if (p.options.contains("crf")) m_crfSpin->setValue(p.options["crf"].toInt());
-    if (p.options.contains("preset")) m_speedCombo->setCurrentIndex(qBound(0, p.options["preset"].toInt(), 5));
-    if (p.options.contains("customVideoBitrateKbps")) m_videoBitrateSpin->setValue(p.options["customVideoBitrateKbps"].toInt());
-    if (p.options.contains("customAudioCodec")) m_audioCodecEdit->setText(p.options["customAudioCodec"].toString());
-    if (p.options.contains("customAudioBitrateKbps")) m_audioBitrateSpin->setValue(p.options["customAudioBitrateKbps"].toInt());
+    if (p.options.contains("customVideoCodec"))
+        m_videoCodecEdit->setText(p.options["customVideoCodec"].toString());
+    if (p.options.contains("crf"))
+        m_crfSpin->setValue(p.options["crf"].toInt());
+    if (p.options.contains("preset"))
+        m_speedCombo->setCurrentIndex(qBound(0, p.options["preset"].toInt(), 5));
+    if (p.options.contains("customVideoBitrateKbps"))
+        m_videoBitrateSpin->setValue(p.options["customVideoBitrateKbps"].toInt());
+    if (p.options.contains("customAudioCodec"))
+        m_audioCodecEdit->setText(p.options["customAudioCodec"].toString());
+    if (p.options.contains("customAudioBitrateKbps"))
+        m_audioBitrateSpin->setValue(p.options["customAudioBitrateKbps"].toInt());
 
-    if (p.options.contains("quality")) m_qualitySpin->setValue(p.options["quality"].toInt());
-    if (p.options.contains("stripMetadata")) m_stripMetadataCheck->setChecked(p.options["stripMetadata"].toBool());
-    if (p.options.contains("autoOrient")) m_autoOrientCheck->setChecked(p.options["autoOrient"].toBool());
-    if (p.options.contains("preserveAspectRatio")) m_preserveAspectRatioCheck->setChecked(p.options["preserveAspectRatio"].toBool());
+    if (p.options.contains("quality"))
+        m_qualitySpin->setValue(p.options["quality"].toInt());
+    if (p.options.contains("stripMetadata"))
+        m_stripMetadataCheck->setChecked(p.options["stripMetadata"].toBool());
+    if (p.options.contains("autoOrient"))
+        m_autoOrientCheck->setChecked(p.options["autoOrient"].toBool());
+    if (p.options.contains("preserveAspectRatio"))
+        m_preserveAspectRatioCheck->setChecked(p.options["preserveAspectRatio"].toBool());
 }
 
 core::ConversionPreset PresetEditorDialog::preset() const {
@@ -194,11 +201,14 @@ core::ConversionPreset PresetEditorDialog::preset() const {
 
     QVariantMap opts = m_existingOptions;
     if (p.sourceCategory == core::MediaCategory::Video || p.sourceCategory == core::MediaCategory::Audio) {
-        if (!m_videoCodecEdit->text().trimmed().isEmpty()) opts["customVideoCodec"] = m_videoCodecEdit->text().trimmed();
+        if (!m_videoCodecEdit->text().trimmed().isEmpty())
+            opts["customVideoCodec"] = m_videoCodecEdit->text().trimmed();
         opts["crf"] = m_crfSpin->value();
         opts["preset"] = m_speedCombo->currentIndex();
-        if (m_videoBitrateSpin->value() > 0) opts["customVideoBitrateKbps"] = m_videoBitrateSpin->value();
-        if (!m_audioCodecEdit->text().trimmed().isEmpty()) opts["customAudioCodec"] = m_audioCodecEdit->text().trimmed();
+        if (m_videoBitrateSpin->value() > 0)
+            opts["customVideoBitrateKbps"] = m_videoBitrateSpin->value();
+        if (!m_audioCodecEdit->text().trimmed().isEmpty())
+            opts["customAudioCodec"] = m_audioCodecEdit->text().trimmed();
         opts["customAudioBitrateKbps"] = m_audioBitrateSpin->value();
     } else if (p.sourceCategory == core::MediaCategory::Image) {
         opts["quality"] = m_qualitySpin->value();
@@ -211,8 +221,10 @@ core::ConversionPreset PresetEditorDialog::preset() const {
 }
 
 void PresetEditorDialog::onExportClicked() {
-    const QString filePath = QFileDialog::getSaveFileName(this, "Export Preset Profiles to JSON", "universal_converter_presets.json", "JSON Files (*.json)");
-    if (filePath.isEmpty()) return;
+    const QString filePath = QFileDialog::getSaveFileName(
+        this, "Export Preset Profiles to JSON", "universal_converter_presets.json", "JSON Files (*.json)");
+    if (filePath.isEmpty())
+        return;
 
     QFile file(filePath);
     if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
@@ -223,13 +235,16 @@ void PresetEditorDialog::onExportClicked() {
 }
 
 void PresetEditorDialog::onImportClicked() {
-    const QString filePath = QFileDialog::getOpenFileName(this, "Import Preset Profiles from JSON", QString(), "JSON Files (*.json)");
-    if (filePath.isEmpty()) return;
+    const QString filePath = QFileDialog::getOpenFileName(this, "Import Preset Profiles from JSON", QString(),
+                                                          "JSON Files (*.json)");
+    if (filePath.isEmpty())
+        return;
 
     QFile file(filePath);
     if (file.open(QIODevice::ReadOnly)) {
         QString err;
-        const bool success = core::PresetRegistry::instance().importProfilesFromJson(QString::fromUtf8(file.readAll()), &err);
+        const bool success =
+            core::PresetRegistry::instance().importProfilesFromJson(QString::fromUtf8(file.readAll()), &err);
         file.close();
         if (success) {
             QMessageBox::information(this, "Import Succeeded", "Presets successfully imported.");

@@ -1,4 +1,5 @@
 #include <QTest>
+#include <QStandardPaths>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QFile>
@@ -36,8 +37,15 @@ using namespace uc::core;
 class CoreTests : public QObject {
     Q_OBJECT
 
-private slots:
+  private slots:
     void initTestCase();
+    void testCancellationDuringPreparation();
+    void testCancellationDuringValidation();
+    void testSvgCancellationAndShutdown();
+    void testRetryAttemptReset();
+    void testConcurrentOutputPreserved();
+    void testWatchPauseAndRecursiveDetection();
+    void testWatchOriginalProtection();
 
     // --- 1. ConversionJob Tests ---
     void testJobStateTransitions();
@@ -136,6 +144,13 @@ private slots:
 };
 
 void CoreTests::initTestCase() {
+    static QTemporaryDir testData;
+    QVERIFY(testData.isValid());
+    QCoreApplication::instance()->setProperty("testDataDirectory", testData.path());
+    qputenv("XDG_DATA_HOME", testData.path().toUtf8());
+    qputenv("XDG_CONFIG_HOME", testData.path().toUtf8());
+    QStandardPaths::setTestModeEnabled(false);
+    QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, testData.path());
     uc::app::ToolchainManager::instance().scanAll();
 }
 
@@ -204,7 +219,7 @@ void CoreTests::testJobCancellation() {
 }
 
 void CoreTests::testFormatNormalization() {
-    auto& reg = FormatRegistry::instance();
+    auto &reg = FormatRegistry::instance();
 
     QCOMPARE(reg.normalizeExtension(".JPG"), "jpeg");
     QCOMPARE(reg.normalizeExtension("jfif"), "jpeg");
@@ -215,24 +230,24 @@ void CoreTests::testFormatNormalization() {
 }
 
 void CoreTests::testFormatLookup() {
-    auto& reg = FormatRegistry::instance();
+    auto &reg = FormatRegistry::instance();
 
-    const auto* fmtMp4 = reg.findById("mp4");
+    const auto *fmtMp4 = reg.findById("mp4");
     QVERIFY(fmtMp4 != nullptr);
     QCOMPARE(fmtMp4->category, MediaCategory::Video);
 
-    const auto* fmtJpg = reg.findByExtension("jpg");
+    const auto *fmtJpg = reg.findByExtension("jpg");
     QVERIFY(fmtJpg != nullptr);
     QCOMPARE(fmtJpg->id, "jpeg");
 
-    const auto* fmtMd = reg.findByFilePath("/path/to/notes.markdown");
+    const auto *fmtMd = reg.findByFilePath("/path/to/notes.markdown");
     QVERIFY(fmtMd != nullptr);
     QCOMPARE(fmtMd->id, "md");
     QCOMPARE(fmtMd->category, MediaCategory::Document);
 }
 
 void CoreTests::testFormatCompatibilityRules() {
-    auto& reg = FormatRegistry::instance();
+    auto &reg = FormatRegistry::instance();
 
     // Video -> Video (Same category: FFmpeg)
     auto c1 = reg.checkCompatibility("mp4", "webm");
@@ -264,16 +279,16 @@ void CoreTests::testFormatCompatibilityRules() {
 }
 
 void CoreTests::testExplicitlyUnsupportedFormats() {
-    auto& reg = FormatRegistry::instance();
+    auto &reg = FormatRegistry::instance();
 
     // Legacy doc is explicitly disabled in VERT
-    const auto* docFmt = reg.findById("doc");
+    const auto *docFmt = reg.findById("doc");
     QVERIFY(docFmt != nullptr);
     QVERIFY(!docFmt->canInput);
     QVERIFY(!docFmt->canOutput);
 
     // RealMedia is input-only
-    const auto* rmFmt = reg.findById("rm");
+    const auto *rmFmt = reg.findById("rm");
     QVERIFY(rmFmt != nullptr);
     QVERIFY(rmFmt->canInput);
     QVERIFY(!rmFmt->canOutput);
@@ -293,14 +308,14 @@ void CoreTests::testOutputPathPlanningModes() {
     f.close();
 
     // Mode: SameAsSource
-    auto plan1 = OutputPathPlanner::planOutputPath(
-        sampleFile, "webm", uc::app::DestinationMode::SameAsSource, "");
+    auto plan1 =
+        OutputPathPlanner::planOutputPath(sampleFile, "webm", uc::app::DestinationMode::SameAsSource, "");
     QVERIFY(plan1.isValid);
     QCOMPARE(plan1.finalFilePath, tempDir.filePath("sample.webm"));
 
     // Mode: SourceConvertedSubfolder
-    auto plan2 = OutputPathPlanner::planOutputPath(
-        sampleFile, "webm", uc::app::DestinationMode::SourceConvertedSubfolder, "");
+    auto plan2 = OutputPathPlanner::planOutputPath(sampleFile, "webm",
+                                                   uc::app::DestinationMode::SourceConvertedSubfolder, "");
     QVERIFY(plan2.isValid);
     QCOMPARE(plan2.finalFilePath, tempDir.filePath("Converted/sample.webm"));
     QVERIFY(QDir(tempDir.filePath("Converted")).exists());
@@ -323,8 +338,8 @@ void CoreTests::testPathCollisions() {
     f2.write("existing");
     f2.close();
 
-    auto plan = OutputPathPlanner::planOutputPath(
-        src, "webm", uc::app::DestinationMode::SameAsSource, "", CollisionPolicy::GenerateUniqueName);
+    auto plan = OutputPathPlanner::planOutputPath(src, "webm", uc::app::DestinationMode::SameAsSource, "",
+                                                  CollisionPolicy::GenerateUniqueName);
     QVERIFY(plan.isValid);
     QCOMPARE(plan.finalFilePath, tempDir.filePath("video_1.webm"));
 }
@@ -340,8 +355,8 @@ void CoreTests::testInPlaceOverwriteGuard() {
     f.close();
 
     // Attempting to overwrite source with exact same target extension
-    auto plan = OutputPathPlanner::planOutputPath(
-        src, "txt", uc::app::DestinationMode::SameAsSource, "", CollisionPolicy::Overwrite);
+    auto plan = OutputPathPlanner::planOutputPath(src, "txt", uc::app::DestinationMode::SameAsSource, "",
+                                                  CollisionPolicy::Overwrite);
     QVERIFY(!plan.isValid);
     QVERIFY(plan.errorMessage.contains("identical"));
 }
@@ -468,6 +483,7 @@ void CoreTests::testOrchestratorQueueConcurrency() {
 }
 
 void CoreTests::testQueuedJobCancellation() {
+    uc::app::ToolchainManager::instance().scanAllAsync(); // Defer dispatch while testing queued cancellation.
     ConversionOrchestrator orchestrator(1);
 
     auto job = std::make_shared<ConversionJob>("j-cancel", QStringList{"/tmp/in.mp4"}, "mp4", "webm", "/tmp");
@@ -493,12 +509,12 @@ void CoreTests::testSlotReleaseAfterCompletion() {
 
 void CoreTests::testOrchestratorEndToEndExecution() {
     using namespace uc::engines;
-    const auto& tc = uc::app::ToolchainManager::instance();
+    const auto &tc = uc::app::ToolchainManager::instance();
     if (!tc.magick().isAvailable && !tc.pandoc().isAvailable && !tc.ffmpeg().isAvailable) {
         QSKIP("No conversion engine is available on host system.");
     }
 
-    auto& history = ConversionHistoryManager::instance();
+    auto &history = ConversionHistoryManager::instance();
     history.clearHistory();
     QCOMPARE(history.records().size(), 0);
 
@@ -528,10 +544,12 @@ void CoreTests::testOrchestratorEndToEndExecution() {
         const QString out1 = tempDir.filePath("out1.png");
         const QString out2 = tempDir.filePath("out2.png");
 
-        job1 = std::make_shared<ConversionJob>("job-e2e-1", QStringList{src1}, "bmp", "png", tempDir.path(), EngineType::ImageMagick);
+        job1 = std::make_shared<ConversionJob>("job-e2e-1", QStringList{src1}, "bmp", "png", tempDir.path(),
+                                               EngineType::ImageMagick);
         job1->setFinalOutputPath(out1);
 
-        job2 = std::make_shared<ConversionJob>("job-e2e-2", QStringList{src2}, "bmp", "png", tempDir.path(), EngineType::ImageMagick);
+        job2 = std::make_shared<ConversionJob>("job-e2e-2", QStringList{src2}, "bmp", "png", tempDir.path(),
+                                               EngineType::ImageMagick);
         job2->setFinalOutputPath(out2);
     } else if (tc.pandoc().isAvailable) {
         auto pandocEngine = std::make_shared<PandocEngine>();
@@ -551,10 +569,12 @@ void CoreTests::testOrchestratorEndToEndExecution() {
         const QString out1 = tempDir.filePath("out1.html");
         const QString out2 = tempDir.filePath("out2.html");
 
-        job1 = std::make_shared<ConversionJob>("job-e2e-1", QStringList{src1}, "md", "html", tempDir.path(), EngineType::Pandoc);
+        job1 = std::make_shared<ConversionJob>("job-e2e-1", QStringList{src1}, "md", "html", tempDir.path(),
+                                               EngineType::Pandoc);
         job1->setFinalOutputPath(out1);
 
-        job2 = std::make_shared<ConversionJob>("job-e2e-2", QStringList{src2}, "md", "html", tempDir.path(), EngineType::Pandoc);
+        job2 = std::make_shared<ConversionJob>("job-e2e-2", QStringList{src2}, "md", "html", tempDir.path(),
+                                               EngineType::Pandoc);
         job2->setFinalOutputPath(out2);
     }
 
@@ -728,7 +748,7 @@ void CoreTests::testArgBuilderHardwareAccelerationMode() {
 
 void CoreTests::testRealFfmpegConversionsEndToEnd() {
     using namespace uc::engines;
-    auto& tc = uc::app::ToolchainManager::instance();
+    auto &tc = uc::app::ToolchainManager::instance();
     tc.scanAll();
 
     if (!tc.ffmpeg().isAvailable || !tc.ffprobe().isAvailable) {
@@ -742,11 +762,9 @@ void CoreTests::testRealFfmpegConversionsEndToEnd() {
 
     // 1. Generate tiny 1-second synthetic video using host FFmpeg
     QProcess genProc;
-    genProc.start(tc.ffmpeg().executablePath, {
-        "-y", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25",
-        "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=44100",
-        "-t", "1.0", "-c:v", "libx264", "-c:a", "aac", srcVideo
-    });
+    genProc.start(tc.ffmpeg().executablePath, {"-y", "-f", "lavfi", "-i", "testsrc=size=320x240:rate=25",
+                                               "-f", "lavfi", "-i", "sine=frequency=1000:sample_rate=44100",
+                                               "-t", "1.0", "-c:v", "libx264", "-c:a", "aac", srcVideo});
     QVERIFY(genProc.waitForFinished(5000));
     QCOMPARE(genProc.exitCode(), 0);
     QVERIFY(QFile::exists(srcVideo));
@@ -760,7 +778,8 @@ void CoreTests::testRealFfmpegConversionsEndToEnd() {
 
     // 3. Test real Video-to-Video conversion (MP4 -> WebM via VP9)
     const QString outWebm = tempDir.filePath("test_out.webm");
-    auto jobVideo = std::make_shared<ConversionJob>("job-v2v", QStringList{srcVideo}, "mp4", "webm", tempDir.path(), EngineType::FFmpeg);
+    auto jobVideo = std::make_shared<ConversionJob>("job-v2v", QStringList{srcVideo}, "mp4", "webm",
+                                                    tempDir.path(), EngineType::FFmpeg);
     jobVideo->setFinalOutputPath(outWebm);
 
     FfmpegEngine engine;
@@ -770,8 +789,7 @@ void CoreTests::testRealFfmpegConversionsEndToEnd() {
     const bool waited = videoFinishSpy.wait(15000);
     qDebug() << "videoFinishSpy waited:" << waited << "count:" << videoFinishSpy.count()
              << "job state:" << static_cast<int>(jobVideo->state())
-             << "statusMsg:" << jobVideo->statusMessage()
-             << "errorMsg:" << jobVideo->errorMessage();
+             << "statusMsg:" << jobVideo->statusMessage() << "errorMsg:" << jobVideo->errorMessage();
     QVERIFY(waited);
     QCOMPARE(jobVideo->state(), JobState::Completed);
     QVERIFY(QFile::exists(outWebm));
@@ -781,7 +799,8 @@ void CoreTests::testRealFfmpegConversionsEndToEnd() {
 
     // 4. Test real Video-to-Audio extraction (MP4 -> MP3)
     const QString outMp3 = tempDir.filePath("test_audio.mp3");
-    auto jobAudio = std::make_shared<ConversionJob>("job-v2a", QStringList{srcVideo}, "mp4", "mp3", tempDir.path(), EngineType::FFmpeg);
+    auto jobAudio = std::make_shared<ConversionJob>("job-v2a", QStringList{srcVideo}, "mp4", "mp3",
+                                                    tempDir.path(), EngineType::FFmpeg);
     jobAudio->setFinalOutputPath(outMp3);
 
     QSignalSpy audioFinishSpy(&engine, &FfmpegEngine::jobFinished);
@@ -797,7 +816,8 @@ void CoreTests::testRealFfmpegConversionsEndToEnd() {
     const auto sysCaps = uc::core::SystemInfo::probe();
     if (sysCaps.hasNvenc && sysCaps.availableHwEncoders.contains("h264_nvenc")) {
         const QString outNvenc = tempDir.filePath("test_nvenc.mkv");
-        auto jobNvenc = std::make_shared<ConversionJob>("job-nvenc", QStringList{srcVideo}, "mp4", "mkv", tempDir.path(), EngineType::FFmpeg);
+        auto jobNvenc = std::make_shared<ConversionJob>("job-nvenc", QStringList{srcVideo}, "mp4", "mkv",
+                                                        tempDir.path(), EngineType::FFmpeg);
         jobNvenc->setFinalOutputPath(outNvenc);
 
         QSignalSpy nvencFinishSpy(&engine, &FfmpegEngine::jobFinished);
@@ -810,8 +830,8 @@ void CoreTests::testRealFfmpegConversionsEndToEnd() {
 
 void CoreTests::testImageMagickCapabilitiesDiscovery() {
     using namespace uc::engines;
-    auto& caps = ImageMagickCapabilities::instance();
-    const auto& tc = uc::app::ToolchainManager::instance();
+    auto &caps = ImageMagickCapabilities::instance();
+    const auto &tc = uc::app::ToolchainManager::instance();
     if (!tc.magick().isAvailable) {
         QSKIP("ImageMagick executable is not available on host system.");
     }
@@ -821,7 +841,7 @@ void CoreTests::testImageMagickCapabilitiesDiscovery() {
     QVERIFY(caps.totalRecognizedFormats() > 100);
     QVERIFY(caps.canReadFormat("PNG"));
     QVERIFY(caps.canWriteFormat("JPEG"));
-    QVERIFY(caps.canReadFormat("CR2")); // RAW readable
+    QVERIFY(caps.canReadFormat("CR2"));   // RAW readable
     QVERIFY(!caps.canWriteFormat("CR2")); // RAW not writable
     QVERIFY(caps.supportsAnimation("GIF"));
     QVERIFY(caps.supportsAnimation("WEBP"));
@@ -875,7 +895,7 @@ void CoreTests::testImageMagickArgBuilderMultiResolutionIco() {
 
 void CoreTests::testRealImageMagickConversionsEndToEnd() {
     using namespace uc::engines;
-    const auto& tc = uc::app::ToolchainManager::instance();
+    const auto &tc = uc::app::ToolchainManager::instance();
     if (!tc.magick().isAvailable) {
         QSKIP("ImageMagick executable is not available on host system.");
     }
@@ -886,11 +906,8 @@ void CoreTests::testRealImageMagickConversionsEndToEnd() {
     // 1. Generate a tiny test PNG with transparent alpha using ImageMagick
     const QString srcPng = tempDir.filePath("sample.png");
     QProcess genProc;
-    genProc.start(tc.magick().executablePath, {
-        "-size", "100x100", "xc:none",
-        "-fill", "red", "-draw", "circle 50,50 50,20",
-        srcPng
-    });
+    genProc.start(tc.magick().executablePath,
+                  {"-size", "100x100", "xc:none", "-fill", "red", "-draw", "circle 50,50 50,20", srcPng});
     QVERIFY(genProc.waitForFinished(5000));
     QCOMPARE(genProc.exitCode(), 0);
     QVERIFY(QFile::exists(srcPng));
@@ -899,7 +916,8 @@ void CoreTests::testRealImageMagickConversionsEndToEnd() {
 
     // 2. Test PNG to JPEG (with resize)
     const QString outJpg = tempDir.filePath("converted.jpg");
-    auto jobJpg = std::make_shared<ConversionJob>("job-img-1", QStringList{srcPng}, "png", "jpeg", tempDir.path(), EngineType::ImageMagick);
+    auto jobJpg = std::make_shared<ConversionJob>("job-img-1", QStringList{srcPng}, "png", "jpeg",
+                                                  tempDir.path(), EngineType::ImageMagick);
     jobJpg->setFinalOutputPath(outJpg);
     QVariantMap opts;
     opts["quality"] = 85;
@@ -920,7 +938,8 @@ void CoreTests::testRealImageMagickConversionsEndToEnd() {
 
     // 3. Test multi-resolution ICO generation
     const QString outIco = tempDir.filePath("icon.ico");
-    auto jobIco = std::make_shared<ConversionJob>("job-ico", QStringList{srcPng}, "png", "ico", tempDir.path(), EngineType::ImageMagick);
+    auto jobIco = std::make_shared<ConversionJob>("job-ico", QStringList{srcPng}, "png", "ico",
+                                                  tempDir.path(), EngineType::ImageMagick);
     jobIco->setFinalOutputPath(outIco);
 
     QSignalSpy icoFinishSpy(&engine, &ImageMagickEngine::jobFinished);
@@ -936,19 +955,15 @@ void CoreTests::testRealImageMagickConversionsEndToEnd() {
     // 4. Test animated GIF generation (multi-frame preservation)
     const QString srcGif = tempDir.filePath("animated.gif");
     QProcess gifGenProc;
-    gifGenProc.start(tc.magick().executablePath, {
-        "-delay", "10",
-        "-size", "50x50", "xc:blue",
-        "-size", "50x50", "xc:green",
-        "-size", "50x50", "xc:red",
-        srcGif
-    });
+    gifGenProc.start(tc.magick().executablePath, {"-delay", "10", "-size", "50x50", "xc:blue", "-size",
+                                                  "50x50", "xc:green", "-size", "50x50", "xc:red", srcGif});
     QVERIFY(gifGenProc.waitForFinished(5000));
     QCOMPARE(gifGenProc.exitCode(), 0);
     QVERIFY(QFile::exists(srcGif));
 
     const QString outWebpAnim = tempDir.filePath("animated.webp");
-    auto jobAnim = std::make_shared<ConversionJob>("job-anim", QStringList{srcGif}, "gif", "webp", tempDir.path(), EngineType::ImageMagick);
+    auto jobAnim = std::make_shared<ConversionJob>("job-anim", QStringList{srcGif}, "gif", "webp",
+                                                   tempDir.path(), EngineType::ImageMagick);
     jobAnim->setFinalOutputPath(outWebpAnim);
 
     QSignalSpy animFinishSpy(&engine, &ImageMagickEngine::jobFinished);
@@ -1035,9 +1050,10 @@ void CoreTests::testPandocArgBuilderPdfEngineMissingGuard() {
 
 namespace {
 // Self-contained, portable mock ZIP writer for unit testing without private Qt headers
-void writeZipMock(const QString& targetPath, const QList<QPair<QString, QByteArray>>& entries) {
+void writeZipMock(const QString &targetPath, const QList<QPair<QString, QByteArray>> &entries) {
     QFile f(targetPath);
-    if (!f.open(QFile::WriteOnly)) return;
+    if (!f.open(QFile::WriteOnly))
+        return;
 
     struct EntryMeta {
         QByteArray name;
@@ -1047,7 +1063,7 @@ void writeZipMock(const QString& targetPath, const QList<QPair<QString, QByteArr
     QList<EntryMeta> metas;
     qint64 offset = 0;
 
-    for (const auto& pair : entries) {
+    for (const auto &pair : entries) {
         const QByteArray nameBytes = pair.first.toUtf8();
         const QByteArray contentBytes = pair.second;
 
@@ -1057,16 +1073,16 @@ void writeZipMock(const QString& targetPath, const QList<QPair<QString, QByteArr
         const quint32 crc = 0, csize = contentBytes.size(), usize = contentBytes.size();
         const quint16 nlen = nameBytes.size(), xlen = 0;
 
-        f.write(reinterpret_cast<const char*>(&ver), 2);
-        f.write(reinterpret_cast<const char*>(&flags), 2);
-        f.write(reinterpret_cast<const char*>(&method), 2);
-        f.write(reinterpret_cast<const char*>(&time), 2);
-        f.write(reinterpret_cast<const char*>(&date), 2);
-        f.write(reinterpret_cast<const char*>(&crc), 4);
-        f.write(reinterpret_cast<const char*>(&csize), 4);
-        f.write(reinterpret_cast<const char*>(&usize), 4);
-        f.write(reinterpret_cast<const char*>(&nlen), 2);
-        f.write(reinterpret_cast<const char*>(&xlen), 2);
+        f.write(reinterpret_cast<const char *>(&ver), 2);
+        f.write(reinterpret_cast<const char *>(&flags), 2);
+        f.write(reinterpret_cast<const char *>(&method), 2);
+        f.write(reinterpret_cast<const char *>(&time), 2);
+        f.write(reinterpret_cast<const char *>(&date), 2);
+        f.write(reinterpret_cast<const char *>(&crc), 4);
+        f.write(reinterpret_cast<const char *>(&csize), 4);
+        f.write(reinterpret_cast<const char *>(&usize), 4);
+        f.write(reinterpret_cast<const char *>(&nlen), 2);
+        f.write(reinterpret_cast<const char *>(&xlen), 2);
         f.write(nameBytes);
         f.write(contentBytes);
 
@@ -1080,7 +1096,7 @@ void writeZipMock(const QString& targetPath, const QList<QPair<QString, QByteArr
     }
 
     const qint64 cdStart = f.pos();
-    for (const auto& meta : metas) {
+    for (const auto &meta : metas) {
         // Central Directory header: PK\x01\x02
         f.write("PK\x01\x02");
         const quint16 verMade = 20, verNeed = 20, flags = 0, method = 0, time = 0, date = 0;
@@ -1088,22 +1104,22 @@ void writeZipMock(const QString& targetPath, const QList<QPair<QString, QByteArr
         const quint16 nlen = meta.name.size(), xlen = 0, clen = 0, disk = 0, intAttr = 0;
         const quint32 extAttr = 0, lclOffset = meta.offset;
 
-        f.write(reinterpret_cast<const char*>(&verMade), 2);
-        f.write(reinterpret_cast<const char*>(&verNeed), 2);
-        f.write(reinterpret_cast<const char*>(&flags), 2);
-        f.write(reinterpret_cast<const char*>(&method), 2);
-        f.write(reinterpret_cast<const char*>(&time), 2);
-        f.write(reinterpret_cast<const char*>(&date), 2);
-        f.write(reinterpret_cast<const char*>(&crc), 4);
-        f.write(reinterpret_cast<const char*>(&csize), 4);
-        f.write(reinterpret_cast<const char*>(&usize), 4);
-        f.write(reinterpret_cast<const char*>(&nlen), 2);
-        f.write(reinterpret_cast<const char*>(&xlen), 2);
-        f.write(reinterpret_cast<const char*>(&clen), 2);
-        f.write(reinterpret_cast<const char*>(&disk), 2);
-        f.write(reinterpret_cast<const char*>(&intAttr), 2);
-        f.write(reinterpret_cast<const char*>(&extAttr), 4);
-        f.write(reinterpret_cast<const char*>(&lclOffset), 4);
+        f.write(reinterpret_cast<const char *>(&verMade), 2);
+        f.write(reinterpret_cast<const char *>(&verNeed), 2);
+        f.write(reinterpret_cast<const char *>(&flags), 2);
+        f.write(reinterpret_cast<const char *>(&method), 2);
+        f.write(reinterpret_cast<const char *>(&time), 2);
+        f.write(reinterpret_cast<const char *>(&date), 2);
+        f.write(reinterpret_cast<const char *>(&crc), 4);
+        f.write(reinterpret_cast<const char *>(&csize), 4);
+        f.write(reinterpret_cast<const char *>(&usize), 4);
+        f.write(reinterpret_cast<const char *>(&nlen), 2);
+        f.write(reinterpret_cast<const char *>(&xlen), 2);
+        f.write(reinterpret_cast<const char *>(&clen), 2);
+        f.write(reinterpret_cast<const char *>(&disk), 2);
+        f.write(reinterpret_cast<const char *>(&intAttr), 2);
+        f.write(reinterpret_cast<const char *>(&extAttr), 4);
+        f.write(reinterpret_cast<const char *>(&lclOffset), 4);
         f.write(meta.name);
     }
 
@@ -1116,13 +1132,13 @@ void writeZipMock(const QString& targetPath, const QList<QPair<QString, QByteArr
     const quint32 cdSz = cdSize, cdOff = cdStart;
     const quint16 commentLen = 0;
 
-    f.write(reinterpret_cast<const char*>(&diskNum), 2);
-    f.write(reinterpret_cast<const char*>(&diskStart), 2);
-    f.write(reinterpret_cast<const char*>(&totalRec), 2);
-    f.write(reinterpret_cast<const char*>(&totalEntries), 2);
-    f.write(reinterpret_cast<const char*>(&cdSz), 4);
-    f.write(reinterpret_cast<const char*>(&cdOff), 4);
-    f.write(reinterpret_cast<const char*>(&commentLen), 2);
+    f.write(reinterpret_cast<const char *>(&diskNum), 2);
+    f.write(reinterpret_cast<const char *>(&diskStart), 2);
+    f.write(reinterpret_cast<const char *>(&totalRec), 2);
+    f.write(reinterpret_cast<const char *>(&totalEntries), 2);
+    f.write(reinterpret_cast<const char *>(&cdSz), 4);
+    f.write(reinterpret_cast<const char *>(&cdOff), 4);
+    f.write(reinterpret_cast<const char *>(&commentLen), 2);
     f.close();
 }
 } // namespace
@@ -1134,10 +1150,8 @@ void CoreTests::testDocumentValidatorZipContainers() {
 
     // 1. Valid DOCX archive created with mock ZIP
     const QString validDocx = tempDir.filePath("valid.docx");
-    writeZipMock(validDocx, {
-        {"[Content_Types].xml", "<?xml version=\"1.0\"?><Types></Types>"},
-        {"word/document.xml", "<?xml version=\"1.0\"?><w:document></w:document>"}
-    });
+    writeZipMock(validDocx, {{"[Content_Types].xml", "<?xml version=\"1.0\"?><Types></Types>"},
+                             {"word/document.xml", "<?xml version=\"1.0\"?><w:document></w:document>"}});
     auto valGoodDocx = DocumentValidator::validate(validDocx, "docx");
     QVERIFY(valGoodDocx.isValid);
     QCOMPARE(valGoodDocx.detectedType, QString("zip-package/docx"));
@@ -1147,7 +1161,9 @@ void CoreTests::testDocumentValidatorZipContainers() {
     {
         QFile f(truncatedDocx);
         QVERIFY(f.open(QFile::WriteOnly));
-        f.write("PK\x03\x04" "truncated broken zip archive bytes that cannot be read with extra padding to exceed one hundred bytes total length in the file");
+        f.write("PK\x03\x04"
+                "truncated broken zip archive bytes that cannot be read with extra padding to exceed one "
+                "hundred bytes total length in the file");
         f.close();
     }
     auto valTrunc = DocumentValidator::validate(truncatedDocx, "docx");
@@ -1156,29 +1172,24 @@ void CoreTests::testDocumentValidatorZipContainers() {
 
     // 3. ZIP archive missing required DOCX entries (e.g. missing word/document.xml)
     const QString missingEntryDocx = tempDir.filePath("missing_entry.docx");
-    writeZipMock(missingEntryDocx, {
-        {"[Content_Types].xml", "<?xml version=\"1.0\"?><Types></Types>"}
-    });
+    writeZipMock(missingEntryDocx, {{"[Content_Types].xml", "<?xml version=\"1.0\"?><Types></Types>"}});
     auto valMissing = DocumentValidator::validate(missingEntryDocx, "docx");
     QVERIFY(!valMissing.isValid);
     QVERIFY(valMissing.errorMessage.contains("word/document.xml"));
 
     // 4. Valid ODT archive
     const QString validOdt = tempDir.filePath("valid.odt");
-    writeZipMock(validOdt, {
-        {"mimetype", "application/vnd.oasis.opendocument.text"},
-        {"content.xml", "<?xml version=\"1.0\"?><office:document-content></office:document-content>"}
-    });
+    writeZipMock(validOdt, {{"mimetype", "application/vnd.oasis.opendocument.text"},
+                            {"content.xml",
+                             "<?xml version=\"1.0\"?><office:document-content></office:document-content>"}});
     auto valGoodOdt = DocumentValidator::validate(validOdt, "odt");
     QVERIFY(valGoodOdt.isValid);
     QCOMPARE(valGoodOdt.detectedType, QString("zip-package/odt"));
 
     // 5. Valid EPUB archive
     const QString validEpub = tempDir.filePath("valid.epub");
-    writeZipMock(validEpub, {
-        {"mimetype", "application/epub+zip"},
-        {"META-INF/container.xml", "<?xml version=\"1.0\"?><container></container>"}
-    });
+    writeZipMock(validEpub, {{"mimetype", "application/epub+zip"},
+                             {"META-INF/container.xml", "<?xml version=\"1.0\"?><container></container>"}});
     auto valGoodEpub = DocumentValidator::validate(validEpub, "epub");
     QVERIFY(valGoodEpub.isValid);
     QCOMPARE(valGoodEpub.detectedType, QString("zip-package/epub"));
@@ -1188,7 +1199,8 @@ void CoreTests::testDocumentValidatorZipContainers() {
     {
         QFile f(validPdf);
         QVERIFY(f.open(QFile::WriteOnly));
-        f.write("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\nxref\ntrailer\n<< /Root 1 0 R >>\nstartxref\n100\n%%EOF\n");
+        f.write("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\nxref\ntrailer\n<< /Root 1 0 R "
+                ">>\nstartxref\n100\n%%EOF\n");
         f.close();
     }
     auto valGoodPdf = DocumentValidator::validate(validPdf, "pdf");
@@ -1222,7 +1234,7 @@ void CoreTests::testDocumentValidatorZipContainers() {
 
 void CoreTests::testRealPandocConversionsEndToEnd() {
     using namespace uc::engines;
-    const auto& tc = uc::app::ToolchainManager::instance();
+    const auto &tc = uc::app::ToolchainManager::instance();
     if (!tc.pandoc().isAvailable) {
         QSKIP("Pandoc executable is not available on host system.");
     }
@@ -1234,14 +1246,16 @@ void CoreTests::testRealPandocConversionsEndToEnd() {
     const QString mdFile = tempDir.filePath("sample.md");
     QFile f(mdFile);
     QVERIFY(f.open(QFile::WriteOnly));
-    f.write("# Introduction\n\nThis is a sample document for Universal Converter.\n\n## Features\n\n- Cross-platform\n- Offline\n");
+    f.write("# Introduction\n\nThis is a sample document for Universal Converter.\n\n## Features\n\n- "
+            "Cross-platform\n- Offline\n");
     f.close();
 
     PandocEngine engine;
 
     // 1. Markdown to HTML
     const QString htmlFile = tempDir.filePath("output.html");
-    auto jobHtml = std::make_shared<ConversionJob>("job-doc-html", QStringList{mdFile}, "md", "html", tempDir.path(), EngineType::Pandoc);
+    auto jobHtml = std::make_shared<ConversionJob>("job-doc-html", QStringList{mdFile}, "md", "html",
+                                                   tempDir.path(), EngineType::Pandoc);
     jobHtml->setFinalOutputPath(htmlFile);
 
     QSignalSpy htmlSpy(&engine, &PandocEngine::jobFinished);
@@ -1255,7 +1269,8 @@ void CoreTests::testRealPandocConversionsEndToEnd() {
 
     // 2. Markdown to DOCX
     const QString docxFile = tempDir.filePath("output.docx");
-    auto jobDocx = std::make_shared<ConversionJob>("job-doc-docx", QStringList{mdFile}, "md", "docx", tempDir.path(), EngineType::Pandoc);
+    auto jobDocx = std::make_shared<ConversionJob>("job-doc-docx", QStringList{mdFile}, "md", "docx",
+                                                   tempDir.path(), EngineType::Pandoc);
     jobDocx->setFinalOutputPath(docxFile);
 
     QSignalSpy docxSpy(&engine, &PandocEngine::jobFinished);
@@ -1269,7 +1284,8 @@ void CoreTests::testRealPandocConversionsEndToEnd() {
 
     // 3. Markdown to PDF (via Typst)
     const QString pdfFile = tempDir.filePath("output.pdf");
-    auto jobPdf = std::make_shared<ConversionJob>("job-doc-pdf", QStringList{mdFile}, "md", "pdf", tempDir.path(), EngineType::Pandoc);
+    auto jobPdf = std::make_shared<ConversionJob>("job-doc-pdf", QStringList{mdFile}, "md", "pdf",
+                                                  tempDir.path(), EngineType::Pandoc);
     jobPdf->setFinalOutputPath(pdfFile);
 
     QSignalSpy pdfSpy(&engine, &PandocEngine::jobFinished);
@@ -1363,7 +1379,8 @@ void CoreTests::testEngineResolverSystemFallback() {
     QVERIFY(res.isAvailable);
     QCOMPARE(res.source, ToolSource::SystemPath);
 #ifdef Q_OS_WIN
-    QVERIFY(res.executablePath.endsWith("ffmpeg.exe", Qt::CaseInsensitive) || res.executablePath.endsWith("ffmpeg", Qt::CaseInsensitive));
+    QVERIFY(res.executablePath.endsWith("ffmpeg.exe", Qt::CaseInsensitive) ||
+            res.executablePath.endsWith("ffmpeg", Qt::CaseInsensitive));
 #else
     QVERIFY(res.executablePath.endsWith("ffmpeg"));
 #endif
@@ -1374,7 +1391,8 @@ void CoreTests::testEngineResolverMissingReportsError() {
     QTemporaryDir emptyAppDir;
     QVERIFY(emptyAppDir.isValid());
 
-    auto res = EngineResolver::resolve("completely_unknown_engine_xyz_123", QString(), "-version", emptyAppDir.path());
+    auto res = EngineResolver::resolve("completely_unknown_engine_xyz_123", QString(), "-version",
+                                       emptyAppDir.path());
     QVERIFY(!res.isAvailable);
     QCOMPARE(res.source, ToolSource::None);
     QVERIFY(res.failureReason.contains("not found"));
@@ -1450,35 +1468,36 @@ void CoreTests::testEngineResolverCompanionPairing() {
 
     // Resolve ffprobe passing companionDir of ffmpeg
     const QString companionDir = QFileInfo(resFfmpeg.executablePath).absolutePath();
-    auto resFfprobe = EngineResolver::resolve("ffprobe", QString(), "-version", tempAppDir.path(), companionDir);
+    auto resFfprobe =
+        EngineResolver::resolve("ffprobe", QString(), "-version", tempAppDir.path(), companionDir);
     QVERIFY(resFfprobe.isAvailable);
     QCOMPARE(resFfprobe.executablePath, ffprobePath);
     QCOMPARE(resFfprobe.version, QString("custom ffprobe 5.0"));
 }
 
 void CoreTests::testPresetRegistryProfiles() {
-    auto& reg = PresetRegistry::instance();
+    auto &reg = PresetRegistry::instance();
     const auto presets = reg.allPresets();
     QVERIFY(presets.size() >= 5);
 
-    const auto* discord = reg.findById("compress_discord");
+    const auto *discord = reg.findById("compress_discord");
     QVERIFY(discord != nullptr);
     QCOMPARE(discord->targetFormatId, QString("mp4"));
     QCOMPARE(discord->sourceCategory, MediaCategory::Video);
     QVERIFY(discord->options.contains("customWidth"));
     QCOMPARE(discord->options["customWidth"].toInt(), 1280);
 
-    const auto* flac = reg.findById("lossless_audio");
+    const auto *flac = reg.findById("lossless_audio");
     QVERIFY(flac != nullptr);
     QCOMPARE(flac->targetFormatId, QString("flac"));
     QCOMPARE(flac->sourceCategory, MediaCategory::Audio);
 
-    const auto* webp = reg.findById("web_ready_images");
+    const auto *webp = reg.findById("web_ready_images");
     QVERIFY(webp != nullptr);
     QCOMPARE(webp->targetFormatId, QString("webp"));
     QCOMPARE(webp->sourceCategory, MediaCategory::Image);
 
-    const auto* mdPdf = reg.findById("markdown_to_pdf");
+    const auto *mdPdf = reg.findById("markdown_to_pdf");
     QVERIFY(mdPdf != nullptr);
     QCOMPARE(mdPdf->targetFormatId, QString("pdf"));
     QCOMPARE(mdPdf->sourceCategory, MediaCategory::Document);
@@ -1488,7 +1507,7 @@ void CoreTests::testPresetRegistryProfiles() {
 }
 
 void CoreTests::testConversionHistoryManagerPersistenceAndRetry() {
-    auto& history = ConversionHistoryManager::instance();
+    auto &history = ConversionHistoryManager::instance();
     history.clearHistory();
     QCOMPARE(history.records().size(), 0);
 
@@ -1500,7 +1519,8 @@ void CoreTests::testConversionHistoryManagerPersistenceAndRetry() {
     f.write("test content bytes 12345");
     f.close();
 
-    auto job = std::make_shared<ConversionJob>("test-job-99", QStringList{testIn}, "mp4", "webm", tempDir.path(), EngineType::FFmpeg);
+    auto job = std::make_shared<ConversionJob>("test-job-99", QStringList{testIn}, "mp4", "webm",
+                                               tempDir.path(), EngineType::FFmpeg);
     job->setFinalOutputPath(tempDir.filePath("sample.webm"));
     QVERIFY(job->transitionTo(JobState::Preparing));
     QVERIFY(job->transitionTo(JobState::Running));
@@ -1567,7 +1587,7 @@ void CoreTests::testMediaEstimatorCalculations() {
 }
 
 void CoreTests::testEngineCapabilityResolverDistinction() {
-    auto& resolver = EngineCapabilityResolver::instance();
+    auto &resolver = EngineCapabilityResolver::instance();
     resolver.refresh();
 
     QVERIFY(resolver.totalRecognizedCount() > 100);
@@ -1586,28 +1606,28 @@ void CoreTests::testEngineCapabilityResolverDistinction() {
 }
 
 void CoreTests::testSubtitleFormatRegistrationAndCompatibility() {
-    auto& registry = FormatRegistry::instance();
+    auto &registry = FormatRegistry::instance();
 
     // Verify subtitle formats exist and belong to MediaCategory::Subtitle
-    const auto* srt = registry.findById("srt");
+    const auto *srt = registry.findById("srt");
     QVERIFY(srt != nullptr);
     QCOMPARE(srt->category, MediaCategory::Subtitle);
     QCOMPARE(srt->defaultExtension, QString("srt"));
     QVERIFY(srt->canInput && srt->canOutput);
 
-    const auto* vtt = registry.findById("vtt");
+    const auto *vtt = registry.findById("vtt");
     QVERIFY(vtt != nullptr);
     QCOMPARE(vtt->category, MediaCategory::Subtitle);
 
-    const auto* ass = registry.findById("ass");
+    const auto *ass = registry.findById("ass");
     QVERIFY(ass != nullptr);
     QCOMPARE(ass->category, MediaCategory::Subtitle);
 
-    const auto* ssa = registry.findById("ssa");
+    const auto *ssa = registry.findById("ssa");
     QVERIFY(ssa != nullptr);
     QCOMPARE(ssa->category, MediaCategory::Subtitle);
 
-    const auto* sub = registry.findById("sub");
+    const auto *sub = registry.findById("sub");
     QVERIFY(sub != nullptr);
     QCOMPARE(sub->category, MediaCategory::Subtitle);
     QVERIFY(sub->canInput);
@@ -1651,7 +1671,7 @@ void CoreTests::testSubtitleArgBuilderGeneration() {
 void CoreTests::testRealSubtitleConversionsEndToEnd() {
     using namespace uc::engines;
 
-    const auto& tc = uc::app::ToolchainManager::instance();
+    const auto &tc = uc::app::ToolchainManager::instance();
     if (!tc.ffmpeg().isAvailable) {
         QSKIP("FFmpeg executable is not available on host system.");
     }
@@ -1666,20 +1686,20 @@ void CoreTests::testRealSubtitleConversionsEndToEnd() {
     // Write valid SRT test fixture
     QFile srtFile(inSrt);
     QVERIFY(srtFile.open(QIODevice::WriteOnly | QIODevice::Text));
-    const QByteArray srtData =
-        "1\n"
-        "00:00:01,000 --> 00:00:04,000\n"
-        "Hello World from Universal Converter!\n\n"
-        "2\n"
-        "00:00:05,500 --> 00:00:09,000\n"
-        "Subtitle Engine Verification.\n\n";
+    const QByteArray srtData = "1\n"
+                               "00:00:01,000 --> 00:00:04,000\n"
+                               "Hello World from Universal Converter!\n\n"
+                               "2\n"
+                               "00:00:05,500 --> 00:00:09,000\n"
+                               "Subtitle Engine Verification.\n\n";
     srtFile.write(srtData);
     srtFile.close();
 
     FfmpegEngine engine;
 
     // 1. SRT -> WebVTT
-    auto jobVtt = std::make_shared<ConversionJob>("job-sub-vtt", QStringList{inSrt}, "srt", "vtt", tempDir.path(), EngineType::FFmpeg);
+    auto jobVtt = std::make_shared<ConversionJob>("job-sub-vtt", QStringList{inSrt}, "srt", "vtt",
+                                                  tempDir.path(), EngineType::FFmpeg);
     jobVtt->setFinalOutputPath(outVtt);
 
     QSignalSpy vttFinishSpy(&engine, &FfmpegEngine::jobFinished);
@@ -1697,7 +1717,8 @@ void CoreTests::testRealSubtitleConversionsEndToEnd() {
     QVERIFY(vttContent.contains("Hello World from Universal Converter!"));
 
     // 2. SRT -> ASS
-    auto jobAss = std::make_shared<ConversionJob>("job-sub-ass", QStringList{inSrt}, "srt", "ass", tempDir.path(), EngineType::FFmpeg);
+    auto jobAss = std::make_shared<ConversionJob>("job-sub-ass", QStringList{inSrt}, "srt", "ass",
+                                                  tempDir.path(), EngineType::FFmpeg);
     jobAss->setFinalOutputPath(outAss);
 
     QSignalSpy assFinishSpy(&engine, &FfmpegEngine::jobFinished);
@@ -1719,14 +1740,14 @@ void CoreTests::testRealSubtitleConversionsEndToEnd() {
     const QString outLatin1Vtt = tempDir.filePath("latin1_sample.vtt");
     QFile latin1File(inLatin1Srt);
     QVERIFY(latin1File.open(QIODevice::WriteOnly));
-    const QByteArray latin1Data =
-        "1\n"
-        "00:00:01,000 --> 00:00:04,000\n"
-        "J\xE1 se passaram anos. N\xE3o sou muito bom.\n\n";
+    const QByteArray latin1Data = "1\n"
+                                  "00:00:01,000 --> 00:00:04,000\n"
+                                  "J\xE1 se passaram anos. N\xE3o sou muito bom.\n\n";
     latin1File.write(latin1Data);
     latin1File.close();
 
-    auto jobLatin1 = std::make_shared<ConversionJob>("job-sub-latin1", QStringList{inLatin1Srt}, "srt", "vtt", tempDir.path(), EngineType::FFmpeg);
+    auto jobLatin1 = std::make_shared<ConversionJob>("job-sub-latin1", QStringList{inLatin1Srt}, "srt", "vtt",
+                                                     tempDir.path(), EngineType::FFmpeg);
     jobLatin1->setFinalOutputPath(outLatin1Vtt);
 
     QSignalSpy latin1Spy(&engine, &FfmpegEngine::jobFinished);
@@ -1742,10 +1763,13 @@ void CoreTests::testRealSubtitleConversionsEndToEnd() {
     QVERIFY(decodedVtt.contains("Já se passaram anos"));
 
     // 4. Real-world user fixture test if present on system
-    const QString desktopFile = "/home/iamthroot/Desktop/visionquest.s01.e02.theseus.(2026).pob.1cd.(14122420)/VisionQuest.S01E02.Theseus.1080p.DSNP.WEB-DL.AAC2.0.H.264-playWEB.srt";
+    const QString desktopFile =
+        "/home/iamthroot/Desktop/visionquest.s01.e02.theseus.(2026).pob.1cd.(14122420)/"
+        "VisionQuest.S01E02.Theseus.1080p.DSNP.WEB-DL.AAC2.0.H.264-playWEB.srt";
     if (QFile::exists(desktopFile)) {
         const QString outDesktopVtt = tempDir.filePath("desktop_test.vtt");
-        auto jobDesktop = std::make_shared<ConversionJob>("job-sub-desktop", QStringList{desktopFile}, "srt", "vtt", tempDir.path(), EngineType::FFmpeg);
+        auto jobDesktop = std::make_shared<ConversionJob>("job-sub-desktop", QStringList{desktopFile}, "srt",
+                                                          "vtt", tempDir.path(), EngineType::FFmpeg);
         jobDesktop->setFinalOutputPath(outDesktopVtt);
 
         QSignalSpy desktopSpy(&engine, &FfmpegEngine::jobFinished);
@@ -1803,7 +1827,7 @@ void CoreTests::testVectorPipelineQtSvgFallbackRasterization() {
 
 void CoreTests::testVectorPipelineRsvgConvertSvgToPdfAndPng() {
     using namespace uc::engines;
-    const auto& tc = uc::app::ToolchainManager::instance();
+    const auto &tc = uc::app::ToolchainManager::instance();
     if (!tc.rsvgConvert().isAvailable) {
         QSKIP("rsvg-convert is not available on host system.");
     }
@@ -1817,10 +1841,9 @@ void CoreTests::testVectorPipelineRsvgConvertSvgToPdfAndPng() {
 
     QFile svgFile(inSvg);
     QVERIFY(svgFile.open(QIODevice::WriteOnly | QIODevice::Text));
-    const QByteArray svgData =
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"120\" height=\"120\">\n"
-        "  <polygon points=\"60,20 100,100 20,100\" fill=\"green\" />\n"
-        "</svg>\n";
+    const QByteArray svgData = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"120\" height=\"120\">\n"
+                               "  <polygon points=\"60,20 100,100 20,100\" fill=\"green\" />\n"
+                               "</svg>\n";
     svgFile.write(svgData);
     svgFile.close();
 
@@ -1886,7 +1909,8 @@ void CoreTests::testRealSvgToRasterConversionEndToEnd() {
     svgFile.close();
 
     uc::engines::ImageMagickEngine engine;
-    auto job = std::make_shared<ConversionJob>("job-svg-png", QStringList{inSvg}, "svg", "png", tempDir.path(), EngineType::ImageMagick);
+    auto job = std::make_shared<ConversionJob>("job-svg-png", QStringList{inSvg}, "svg", "png",
+                                               tempDir.path(), EngineType::ImageMagick);
     job->setFinalOutputPath(outPng);
 
     QSignalSpy finishSpy(&engine, &uc::engines::ImageMagickEngine::jobFinished);
@@ -2010,7 +2034,7 @@ void CoreTests::testWatchFolderServiceMoveToProcessed() {
 
     // Verify file was moved to processed subfolder
     const QString processedFile = QDir(watchDir.path()).filePath("processed/to_process.bmp");
-    QVERIFY(!QFile::exists(sampleFile)); // Original removed
+    QVERIFY(!QFile::exists(sampleFile));   // Original removed
     QVERIFY(QFile::exists(processedFile)); // Moved to processed/
 }
 
@@ -2022,12 +2046,10 @@ void CoreTests::testPresetRegistryJsonExportImport() {
     customP.category = PresetCategory::Custom;
     customP.sourceCategory = MediaCategory::Video;
     customP.targetFormatId = "mp4";
-    customP.options = {
-        {"customVideoCodec", "libx265"},
-        {"crf", 20},
-        {"customAudioCodec", "aac"},
-        {"customAudioBitrateKbps", 256}
-    };
+    customP.options = {{"customVideoCodec", "libx265"},
+                       {"crf", 20},
+                       {"customAudioCodec", "aac"},
+                       {"customAudioBitrateKbps", 256}};
     customP.isBuiltIn = false;
 
     PresetRegistry::instance().registerCustomPreset(customP);
@@ -2047,7 +2069,7 @@ void CoreTests::testPresetRegistryJsonExportImport() {
     const bool imported = PresetRegistry::instance().importProfilesFromJson(exportedJson, &err);
     QVERIFY2(imported, qPrintable(err));
 
-    const auto* restored = PresetRegistry::instance().findById("custom_test_h265");
+    const auto *restored = PresetRegistry::instance().findById("custom_test_h265");
     QVERIFY(restored != nullptr);
     QCOMPARE(restored->name, QString("Custom H.265 Master"));
     QCOMPARE(restored->targetFormatId, QString("mp4"));
@@ -2074,7 +2096,7 @@ void CoreTests::testPresetRegistryCustomProfilePersistence() {
     // Force loadCustomPresets to re-read file
     PresetRegistry::instance().loadCustomPresets();
 
-    const auto* found = PresetRegistry::instance().findById(testId);
+    const auto *found = PresetRegistry::instance().findById(testId);
     QVERIFY(found != nullptr);
     QCOMPARE(found->name, QString("Persistent Audio Profile"));
 
@@ -2140,7 +2162,8 @@ void CoreTests::testVideoToAnimatedImageArgBuilder() {
     // 2. Video -> WebP
     FfmpegConversionOptions webpOpts;
     webpOpts.targetFormatId = "webp";
-    const auto webpArgs = FfmpegArgBuilder::buildArguments("/tmp/in.mp4", "/tmp/out.webp", probe, webpOpts, {});
+    const auto webpArgs =
+        FfmpegArgBuilder::buildArguments("/tmp/in.mp4", "/tmp/out.webp", probe, webpOpts, {});
     QVERIFY(webpArgs.isValid);
     QCOMPARE(webpArgs.chosenVideoCodec, QString("libwebp"));
     QVERIFY(webpArgs.arguments.contains("-loop"));
@@ -2149,7 +2172,8 @@ void CoreTests::testVideoToAnimatedImageArgBuilder() {
     // 3. Video -> AVIF
     FfmpegConversionOptions avifOpts;
     avifOpts.targetFormatId = "avif";
-    const auto avifArgs = FfmpegArgBuilder::buildArguments("/tmp/in.mp4", "/tmp/out.avif", probe, avifOpts, {});
+    const auto avifArgs =
+        FfmpegArgBuilder::buildArguments("/tmp/in.mp4", "/tmp/out.avif", probe, avifOpts, {});
     QVERIFY(avifArgs.isValid);
     QCOMPARE(avifArgs.chosenVideoCodec, QString("libsvtav1"));
     QVERIFY(avifArgs.arguments.contains("-an"));
@@ -2167,16 +2191,18 @@ void CoreTests::testRealVideoToAnimatedConversionsEndToEnd() {
     const QString outFromGifMp4 = tempDir.filePath("restored_from_gif.mp4");
 
     // Generate a quick 1.5s synthetic MP4 clip
-    const auto genRes = ProcessRunner::executeSync("ffmpeg", {
-        "-f", "lavfi", "-i", "testsrc=duration=1.5:size=320x240:rate=10",
-        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", inMp4
-    }, 10000);
+    const auto genRes =
+        ProcessRunner::executeSync("ffmpeg",
+                                   {"-f", "lavfi", "-i", "testsrc=duration=1.5:size=320x240:rate=10", "-c:v",
+                                    "libx264", "-pix_fmt", "yuv420p", "-y", inMp4},
+                                   10000);
     QVERIFY2(genRes.isSuccess(), "Failed to generate synthetic MP4 test fixture");
 
     FfmpegEngine engine;
 
     // 1. MP4 -> GIF
-    auto jobGif = std::make_shared<ConversionJob>("job-v-gif", QStringList{inMp4}, "mp4", "gif", tempDir.path(), EngineType::FFmpeg);
+    auto jobGif = std::make_shared<ConversionJob>("job-v-gif", QStringList{inMp4}, "mp4", "gif",
+                                                  tempDir.path(), EngineType::FFmpeg);
     jobGif->setFinalOutputPath(outGif);
     QSignalSpy gifSpy(&engine, &FfmpegEngine::jobFinished);
     QVERIFY(engine.executeJob(jobGif));
@@ -2186,7 +2212,8 @@ void CoreTests::testRealVideoToAnimatedConversionsEndToEnd() {
     QVERIFY(QFileInfo(outGif).size() > 1000);
 
     // 2. MP4 -> WebP
-    auto jobWebp = std::make_shared<ConversionJob>("job-v-webp", QStringList{inMp4}, "mp4", "webp", tempDir.path(), EngineType::FFmpeg);
+    auto jobWebp = std::make_shared<ConversionJob>("job-v-webp", QStringList{inMp4}, "mp4", "webp",
+                                                   tempDir.path(), EngineType::FFmpeg);
     jobWebp->setFinalOutputPath(outWebp);
     QSignalSpy webpSpy(&engine, &FfmpegEngine::jobFinished);
     QVERIFY(engine.executeJob(jobWebp));
@@ -2196,7 +2223,8 @@ void CoreTests::testRealVideoToAnimatedConversionsEndToEnd() {
     QVERIFY(QFileInfo(outWebp).size() > 500);
 
     // 3. MP4 -> AVIF
-    auto jobAvif = std::make_shared<ConversionJob>("job-v-avif", QStringList{inMp4}, "mp4", "avif", tempDir.path(), EngineType::FFmpeg);
+    auto jobAvif = std::make_shared<ConversionJob>("job-v-avif", QStringList{inMp4}, "mp4", "avif",
+                                                   tempDir.path(), EngineType::FFmpeg);
     jobAvif->setFinalOutputPath(outAvif);
     QSignalSpy avifSpy(&engine, &FfmpegEngine::jobFinished);
     QVERIFY(engine.executeJob(jobAvif));
@@ -2206,7 +2234,8 @@ void CoreTests::testRealVideoToAnimatedConversionsEndToEnd() {
     QVERIFY(QFileInfo(outAvif).size() > 500);
 
     // 4. Vice-versa: GIF -> MP4
-    auto jobFromGif = std::make_shared<ConversionJob>("job-gif-mp4", QStringList{outGif}, "gif", "mp4", tempDir.path(), EngineType::FFmpeg);
+    auto jobFromGif = std::make_shared<ConversionJob>("job-gif-mp4", QStringList{outGif}, "gif", "mp4",
+                                                      tempDir.path(), EngineType::FFmpeg);
     jobFromGif->setFinalOutputPath(outFromGifMp4);
     QSignalSpy fromGifSpy(&engine, &FfmpegEngine::jobFinished);
     QVERIFY(engine.executeJob(jobFromGif));
@@ -2214,6 +2243,222 @@ void CoreTests::testRealVideoToAnimatedConversionsEndToEnd() {
     QCOMPARE(jobFromGif->state(), JobState::Completed);
     QVERIFY(QFile::exists(outFromGifMp4));
     QVERIFY(QFileInfo(outFromGifMp4).size() > 1000);
+}
+
+void CoreTests::testCancellationDuringPreparation() {
+    if (!uc::app::ToolchainManager::instance().ffmpeg().isAvailable)
+        QSKIP("FFmpeg unavailable");
+    QTemporaryDir dir;
+    QFile source(dir.filePath("source.mp4"));
+    QVERIFY(source.open(QIODevice::WriteOnly));
+    source.write("invalid media");
+    source.close();
+    for (int attempt = 0; attempt < 20; ++attempt) {
+        uc::engines::FfmpegEngine engine;
+        auto job = std::make_shared<ConversionJob>(QString::number(attempt), QStringList{source.fileName()},
+                                                   "mp4", "webm", dir.path(), EngineType::FFmpeg);
+        job->setFinalOutputPath(dir.filePath("result.webm"));
+        QSignalSpy finished(&engine, &uc::engines::FfmpegEngine::jobFinished);
+        QVERIFY(engine.executeJob(job));
+        engine.cancelJob(job->id());
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 5000);
+        QCOMPARE(job->state(), JobState::Cancelled);
+        engine.shutdown();
+        QCoreApplication::processEvents();
+        QCOMPARE(finished.size(), 1);
+        QVERIFY(!QFile::exists(job->finalOutputPath()));
+    }
+}
+
+void CoreTests::testSvgCancellationAndShutdown() {
+    QTemporaryDir dir;
+    QFile source(dir.filePath("source.svg"));
+    QVERIFY(source.open(QIODevice::WriteOnly));
+    source.write("<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40'><rect width='40' "
+                 "height='40' fill='red'/></svg>");
+    source.close();
+    for (int attempt = 0; attempt < 10; ++attempt) {
+        uc::engines::ImageMagickEngine engine;
+        auto job = std::make_shared<ConversionJob>(QString::number(attempt), QStringList{source.fileName()},
+                                                   "svg", "png", dir.path(), EngineType::ImageMagick);
+        job->setFinalOutputPath(dir.filePath("result.png"));
+        QSignalSpy finished(&engine, &uc::engines::ImageMagickEngine::jobFinished);
+        QVERIFY(engine.executeJob(job));
+        engine.cancelJob(job->id());
+        engine.shutdown();
+        QCOMPARE(job->state(), JobState::Cancelled);
+        QCOMPARE(finished.size(), 1);
+        QCoreApplication::processEvents();
+        QCOMPARE(finished.size(), 1);
+        QVERIFY(!QFile::exists(job->finalOutputPath()));
+    }
+}
+
+void CoreTests::testCancellationDuringValidation() {
+    QTemporaryDir dir;
+    const auto &tc = uc::app::ToolchainManager::instance();
+    if (tc.ffmpeg().isAvailable) {
+        const QString input = dir.filePath("tone.wav");
+        auto generated = ProcessRunner::executeSync(
+            tc.ffmpeg().executablePath, {"-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=0.1", input},
+            5000);
+        QVERIFY(generated.isSuccess());
+        uc::engines::FfmpegEngine engine;
+        auto job = std::make_shared<ConversionJob>("validation", QStringList{input}, "wav", "flac",
+                                                   dir.path(), EngineType::FFmpeg);
+        job->setFinalOutputPath(dir.filePath("tone.flac"));
+        bool reached = false;
+        connect(job.get(), &ConversionJob::progressChanged, &engine, [&](int, const QString &message) {
+            if (message.startsWith("Validating")) {
+                reached = true;
+                engine.cancelJob(job->id());
+            }
+        });
+        QSignalSpy finished(&engine, &uc::engines::FfmpegEngine::jobFinished);
+        QVERIFY(engine.executeJob(job));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 10000);
+        QVERIFY(reached);
+        QCOMPARE(job->state(), JobState::Cancelled);
+        QVERIFY(!QFile::exists(job->finalOutputPath()));
+    }
+    if (tc.magick().isAvailable) {
+        const QString input = dir.filePath("image.png");
+        QImage image(40, 40, QImage::Format_RGB32);
+        image.fill(Qt::red);
+        QVERIFY(image.save(input));
+        uc::engines::ImageMagickEngine engine;
+        auto job = std::make_shared<ConversionJob>("image-validation", QStringList{input}, "png", "jpg",
+                                                   dir.path(), EngineType::ImageMagick);
+        job->setFinalOutputPath(dir.filePath("image.jpg"));
+        bool reached = false;
+        connect(job.get(), &ConversionJob::progressChanged, &engine, [&](int, const QString &message) {
+            if (message.startsWith("Validating")) {
+                reached = true;
+                engine.cancelJob(job->id());
+            }
+        });
+        QSignalSpy finished(&engine, &uc::engines::ImageMagickEngine::jobFinished);
+        QVERIFY(engine.executeJob(job));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 10000);
+        QVERIFY(reached);
+        QCOMPARE(job->state(), JobState::Cancelled);
+        QVERIFY(!QFile::exists(job->finalOutputPath()));
+    }
+}
+
+void CoreTests::testRetryAttemptReset() {
+    ConversionJob job("retry", {}, "mp4", "webm", "/tmp");
+    QVERIFY(job.transitionTo(JobState::Preparing));
+    QVERIFY(job.transitionTo(JobState::Running));
+    job.setProgress(70);
+    job.setTelemetry(2, 10);
+    job.setDiagnosticOutput("old diagnostics");
+    job.setError("resource temporarily unavailable");
+    QVERIFY(job.completedAt().isValid());
+    QVERIFY(job.transitionTo(JobState::Queued));
+    QVERIFY(job.errorMessage().isEmpty());
+    QVERIFY(job.diagnosticOutput().isEmpty());
+    QVERIFY(!job.startedAt().isValid());
+    QVERIFY(!job.completedAt().isValid());
+    QCOMPARE(job.progressPercentage(), -1);
+    QCOMPARE(job.etaSeconds(), -1);
+}
+
+void CoreTests::testConcurrentOutputPreserved() {
+    QTemporaryDir dir;
+    QFile source(dir.filePath("source.txt"));
+    QVERIFY(source.open(QIODevice::WriteOnly));
+    source.write("source");
+    source.close();
+    auto plan = OutputPathPlanner::planOutputPath(source.fileName(), "html",
+                                                  uc::app::DestinationMode::SameAsSource, {});
+    QVERIFY(plan.isValid);
+    QFile competitor(plan.finalFilePath);
+    QVERIFY(competitor.open(QIODevice::WriteOnly));
+    competitor.write("preserve me");
+    competitor.close();
+    const auto temp = OutputPathPlanner::generateTemporaryOutputPath(plan.finalFilePath);
+    QFile result(temp);
+    QVERIFY(result.open(QIODevice::WriteOnly));
+    result.write("replacement");
+    result.close();
+    QString error;
+    QVERIFY(!OutputPathPlanner::publishTempToFinal(temp, plan.finalFilePath, &error));
+    QVERIFY(!error.isEmpty());
+    QVERIFY(competitor.open(QIODevice::ReadOnly));
+    QCOMPARE(competitor.readAll(), QByteArray("preserve me"));
+}
+
+void CoreTests::testWatchPauseAndRecursiveDetection() {
+    QTemporaryDir dir;
+    QDir().mkpath(dir.filePath("nested"));
+    ConversionOrchestrator orchestrator;
+    WatchFolderService watch(&orchestrator);
+    WatchFolderConfig cfg;
+    cfg.id = "nested-watch";
+    cfg.folderPath = dir.path();
+    cfg.targetFormatId = "html";
+    cfg.isRecursive = true;
+    cfg.debounceSeconds = 2;
+    watch.addFolder(cfg);
+    QFile file(dir.filePath("nested/input.md"));
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("# Hello");
+    file.close();
+    QSignalSpy detected(&watch, &WatchFolderService::fileDetected);
+    QTRY_VERIFY_WITH_TIMEOUT(detected.size() > 0, 7000);
+    watch.setFolderEnabled(cfg.id, false);
+    QCOMPARE(watch.pendingCount(cfg.id), 0);
+    QTest::qWait(1200);
+    QCOMPARE(orchestrator.totalJobCount(), 0);
+}
+
+void CoreTests::testWatchOriginalProtection() {
+    if (!uc::app::ToolchainManager::instance().pandoc().isAvailable)
+        QSKIP("Pandoc unavailable");
+    QTemporaryDir dir;
+    QDir().mkpath(dir.filePath("processed"));
+    auto write = [](const QString &path, const QByteArray &bytes) {
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly))
+            return false;
+        return file.write(bytes) == bytes.size();
+    };
+    QVERIFY(write(dir.filePath("processed/input.md"), "Archived original"));
+    QVERIFY(write(dir.filePath("input.md"), "# New original"));
+    ConversionOrchestrator orchestrator;
+    orchestrator.setPandocEngine(std::make_shared<uc::engines::PandocEngine>());
+    WatchFolderService watch(&orchestrator);
+    WatchFolderConfig cfg;
+    cfg.id = "protect";
+    cfg.folderPath = dir.path();
+    cfg.targetFormatId = "html";
+    cfg.debounceSeconds = 1;
+    cfg.postAction = WatchPostAction::MoveToProcessed;
+    cfg.isRecursive = true;
+    QSignalSpy finished(&orchestrator, &ConversionOrchestrator::jobFinished);
+    watch.addFolder(cfg);
+    QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 1, 7000);
+    QFile archived(dir.filePath("processed/input.md"));
+    QVERIFY(archived.open(QIODevice::ReadOnly));
+    QCOMPARE(archived.readAll(), QByteArray("Archived original"));
+    QVERIFY(QFile::exists(dir.filePath("processed/input_1.md")));
+    QVERIFY(!QFile::exists(dir.filePath("input.md")));
+    watch.scanAllNow();
+    QCOMPARE(watch.pendingCount(cfg.id), 0);
+    cfg.postAction = WatchPostAction::DeleteOriginal;
+    watch.updateFolder(cfg);
+    const QString changed = dir.filePath("changed.md");
+    QVERIFY(write(changed, "# Before"));
+    auto connection =
+        connect(&orchestrator, &ConversionOrchestrator::jobStarted, &watch, [&](const QString &) {
+            QVERIFY(write(changed, "# Changed while converting — preserve this version"));
+        });
+    watch.scanAllNow();
+    QTRY_COMPARE_WITH_TIMEOUT(finished.size(), 2, 7000);
+    disconnect(connection);
+    QVERIFY(QFile::exists(changed));
+    QVERIFY(watch.activity(cfg.id).contains("changed"));
 }
 
 QTEST_GUILESS_MAIN(CoreTests)

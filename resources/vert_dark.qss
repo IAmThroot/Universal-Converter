@@ -5,7 +5,7 @@
  * ========================================================================= */
 
 * {
-    outline: none;
+    outline-color: #34d399;
 }
 
 QMainWindow, QWidget#centralWidget {
@@ -63,7 +63,7 @@ QMenu::separator {
 /* --- Status Bar --- */
 QStatusBar {
     background-color: #121215;
-    color: #71717a;
+    color: #a1a1aa;
     border-top: 1px solid #27272a;
     font-size: 12px;
     padding: 4px 10px;
@@ -230,3 +230,27 @@ QScrollBar::handle:horizontal:hover {
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
     width: 0px;
 }
+
+/* Shared dialog surfaces and keyboard focus. */
+QDialog, QMessageBox { background: #121215; color: #f4f4f5; }
+QLabel, QCheckBox, QGroupBox { color: #d4d4d8; }
+QLineEdit, QComboBox, QSpinBox, QPlainTextEdit, QTextEdit, QListWidget, QTableWidget {
+    background: #18181b; color: #f4f4f5; border: 1px solid #3f3f46; border-radius: 5px; padding: 6px;
+    selection-background-color: #065f46; selection-color: #ffffff;
+}
+QPushButton:focus, QLineEdit:focus, QComboBox:focus, QTreeWidget:focus, QTableWidget:focus, QSlider:focus {
+    border: 2px solid #34d399;
+}
+QPushButton#primaryButton { background: #10b981; color: #022c22; font-weight: 600; }
+QPushButton:disabled { color: #a1a1aa; background: #27272a; }
+QProgressBar { border: 1px solid #3f3f46; border-radius: 4px; text-align: center; color: #f4f4f5; }
+QProgressBar::chunk { background: #047857; }
+QToolTip { background: #27272a; color: #f4f4f5; border: 1px solid #52525b; }
+QHeaderView::section { background: #18181b; color: #d4d4d8; padding: 8px; }
+
+QWidget#queueView { background: #09090b; }
+QWidget#dropZone { background: #121215; border: 2px dashed #3f3f46; border-radius: 12px; }
+QWidget#dropZone[dragActive="true"], QWidget#dropZone:focus { border-color: #34d399; }
+QLabel#brandTitle { font-size: 19px; font-weight: 700; color: #f4f4f5; }
+QTableCornerButton::section { background: #18181b; border: none; }
+QPushButton#primaryButton:disabled { background: #27272a; color: #a1a1aa; }

@@ -7,8 +7,8 @@
 [![Build & Package Universal Converter](https://github.com/IAmThroot/Universal-Converter/actions/workflows/package.yml/badge.svg)](https://github.com/IAmThroot/Universal-Converter/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-brightgreen.svg)](https://en.cppreference.com/w/cpp/20)
-[![Qt 6](https://img.shields.io/badge/Qt-6.5%2B-green.svg)](https://www.qt.io/)
-[![Version: 1.1.5](https://img.shields.io/badge/Release-v1.1.5-emerald.svg)](https://github.com/IAmThroot/Universal-Converter/releases/tag/v1.1.5)
+[![Qt 6](https://img.shields.io/badge/Qt-6.4%2B-green.svg)](https://www.qt.io/)
+[![Version: 1.1.6](https://img.shields.io/badge/Release-v1.1.6-emerald.svg)](https://github.com/IAmThroot/Universal-Converter/releases/tag/v1.1.6)
 
 A high-performance, completely offline, native **C++20 / Qt 6** desktop application for converting audio, video, images, subtitles, and documents across formats without web runtimes, Electron, localhost daemons, or remote API dependencies.
 
@@ -17,16 +17,16 @@ A high-performance, completely offline, native **C++20 / Qt 6** desktop applicat
 ## Features & Highlights
 
 - **Native Architecture**: Built directly with modern C++20 and Qt 6 Widgets. Low memory footprint, fast startup, and native FreeDesktop/Windows integration.
-- **Conversion Presets & Custom Preset Builder**: Ready-to-use profiles including *"Compress for Discord (<25MB)"*, *"YouTube 1080p"*, *"High-Quality Animated GIF"*, *"Animated WebP"*, *"Lossless Audio (FLAC)"*, and *"Markdown to PDF"*, plus an interactive GUI to build, save, export, and import custom JSON recipes.
-- **Watch Folder Automation Daemon**: Background filesystem watcher with size-stable debouncing, custom output routing, and configurable post-processing triggers (*Move to Processed*, *Delete Original*, *Keep Original*).
-- **Subtitles & Text Stream Engine**: Full conversion matrix for `SRT ↔ VTT ↔ ASS ↔ SSA ↔ SUB` with automatic multi-tier character encoding detection (BOM, strict UTF-8, `uchardet`, `CP1252`/Latin-1), preventing decoding errors across international subtitle sets.
+- **Conversion Presets & Custom Preset Builder**: Ready-to-use profiles including *"Compress for Discord"*, *"YouTube 1080p"*, *"High-Quality Animated GIF"*, *"Animated WebP"*, *"Lossless Audio (FLAC)"*, and *"Markdown to PDF"*, plus an interactive GUI to build, save, export, and import custom JSON recipes.
+- **Watch Folder Automation**: Background filesystem watcher with size-stable debouncing, custom output routing, and configurable post-processing triggers (*Move to Processed*, *Delete Original*, *Keep Original*).
+- **Subtitles & Text Stream Engine**: Conversion between `SRT`, `VTT`, `ASS`, and `SSA`, with `.sub` supported as input only with automatic multi-tier character encoding detection (BOM, strict UTF-8, `uchardet`, `CP1252`/Latin-1), preventing decoding errors across international subtitle sets.
 - **Video ↔ Animated Image Pipelines**: High-fidelity bidirectional conversion between video and animated images (`GIF`, `WebP`, `AVIF`) using dual-pass `palettegen`/`paletteuse` filters, looping controls, and audio stripping.
 - **Modern Vector & Image Pipelines**: First-class SVG vector rasterization via `rsvg-convert` with a zero-dependency `Qt6::Svg` fallback, plus detection and execution hooks for standalone image optimization toolchains (`oxipng`, `pngquant`, `cwebp`, `avifenc`).
-- **Interactive Before & After Image Preview**: Dual-panel visual comparison showing original vs compressed preview with live quality slider (10% - 100%) and estimated output file size.
-- **Dynamic Format Capability Resolver**: Live distinction between **Recognized**, **Available**, and **Verified** formats based on runtime inspection of installed engine binaries and delegates.
+- **Interactive Before & After Image Preview**: Dual-panel comparison using reduced-resolution ImageMagick samples, a debounced quality slider, zoom, and a transparency checkerboard. Preview failure does not block conversion.
+- **Dynamic Format Capability Resolver**: Route availability checks with blocking reasons based on installed tools, output containers, required encoders, and image/document capabilities. Actual input streams are inspected during conversion.
 - **Conversion History & Retry**: Privacy-preserving persistent local history logging timestamps, file sizes, conversion duration, and job status with one-click retry.
 - **Unified Engine Orchestration**:
-  - **Video & Audio**: Multi-threaded encoding via FFmpeg, full hardware acceleration support (NVIDIA NVENC, Intel VA-API / QSV, AMD AMF), and accurate stream probing via FFprobe.
+  - **Video & Audio**: Multi-threaded encoding via FFmpeg, hardware acceleration where supported by the installed engine and available device (NVENC, VA-API, QSV), and accurate stream probing via FFprobe.
   - **Subtitles**: Direct text stream transcoding via FFmpeg with intelligent charset negotiation.
   - **Images & Vector**: Raster, vector, and RAW image conversions across 50+ formats powered by ImageMagick and `rsvg-convert`.
   - **Documents**: Markdown, DOCX, HTML, EPUB, RTF, LaTeX, ODT, AsciiDoc, Org-Mode, Textile, and MediaWiki powered by bundled Pandoc.
@@ -40,23 +40,20 @@ A high-performance, completely offline, native **C++20 / Qt 6** desktop applicat
 
 ## Supported Formats & Capability Model
 
-Universal Converter distinguishes between three tiers of format support:
-1. **Recognized**: The container format or document syntax is registered in the application schema with valid MIME types and canonical normalization rules.
-2. **Available**: An installed local or host engine (`ffmpeg`, `magick`, `pandoc`, or `typst`) has been dynamically probed and reports read/write support for the container and its underlying codecs.
-3. **Verified**: The conversion route has passed end-to-end integration and automated test suite verification against real binary media.
+The registry describes known formats and permitted routes. The application checks installed tools and reported capabilities before enabling a route, and revalidates before dispatch. Input codec/delegate restrictions can still cause a conversion to fail. Registry test tiers are separate from runtime readiness and do not mean every file or host configuration has been tested.
 
-### Verified Native Formats (114 Unique Formats Audited)
+### Registered formats (availability depends on installed tools)
 
-| Engine | Category | Verified Count | Formats |
+| Engine | Category | Listed Count | Formats |
 | :--- | :--- | :---: | :--- |
 | **FFmpeg** | Video & Animated | 23 | `mp4`, `mkv`, `webm`, `avi`, `mov`, `flv`, `wmv`, `m4v`, `3gp`, `ts`, `vob`, `ogv`, `mpeg`, `mpg`, `m2ts`, `asf`, `f4v`, `y4m`, `dv`, `wtv`, animated `gif`, `webp`, `avif` |
 | **FFmpeg** | Audio | 23 | `mp3`, `aac`, `ogg`, `opus`, `flac`, `wav`, `m4a`, `wma`, `aiff`, `alac`, `ac3`, `mka`, `amr`, `ape`, `ra`, `voc`, `au`, `caf`, `spx`, `mid`, `eac3`, `dts`, `wv` |
-| **FFmpeg** | Subtitles | 5 | `srt`, `vtt`, `ass`, `ssa`, `sub` (with automatic character encoding detection) |
+| **FFmpeg** | Subtitles | 5 | `srt`, `vtt`, `ass`, `ssa`, `sub` (input only; with automatic character encoding detection) |
 | **ImageMagick & Vector** | Images & RAW | 50 | `png`, `jpg`, `jpeg`, `webp`, `gif`, `bmp`, `tiff`, `ico`, `svg`, `avif`, `tga`, `heic`, `dcm`, `cr2`, `nef`, `arw`, `dng`, `orf`, `rw2`, `pef`, `jxl`, `exr`, `pcx`, `pbm`, `pgm`, `ppm`, `pnm`, `xpm`, `xbm`, `wbmp`, `dds`, `dpx`, `cin`, `sgi`, `ras`, `qoi`, `mos`, `raw`, `3fr`, `erf`, `mrw`, `mef`, `srw`, `sr2`, `srf`, etc. |
 | **Pandoc + Typst** | Documents & PDF | 16 | `md`, `markdown`, `docx`, `odt`, `epub`, `tex`, `rst`, `adoc`, `org`, `textile`, `wiki`, `opml`, `rtf`, `txt`, `pdf`, `html` |
 
 > [!TIP]
-> **Container vs. Codec Discovery**: An MP4 container requires supported video/audio codecs in your installed FFmpeg build; Camera RAW formats require ImageMagick delegate libraries (`libraw`, `librsvg`). Universal Converter dynamically probes your installed engine capabilities at launch and disables unsupported conversion routes.
+> **Container vs. Codec Discovery**: An MP4 container requires supported video/audio codecs in your installed FFmpeg build; Camera RAW formats require ImageMagick delegate libraries (`libraw`, `librsvg`). Universal Converter dynamically probes your installed engine capabilities at launch and disables unavailable routes. Registry test tiers describe coverage, not guarantees for every host or file.
 
 
 ---
@@ -97,8 +94,8 @@ Download the latest pre-built binaries directly from the [GitHub Releases](https
     - **Fedora**: `sudo dnf install ffmpeg ImageMagick`
 
 - **Windows (x64)**:
-  - 💾 **Download `UniversalConverter-1.1.5-win64.exe`** (NSIS setup wizard with desktop shortcuts and uninstaller)
-  - 🗜️ **Download `UniversalConverter-1.1.5-win64.zip`** (Portable package: extract and run `UniversalConverter.exe`)
+  - 💾 **Download `UniversalConverter-1.1.6-win64.exe`** (NSIS setup wizard with desktop shortcuts and uninstaller)
+  - 🗜️ **Download `UniversalConverter-1.1.6-win64.zip`** (Portable package: extract and run `UniversalConverter.exe`)
   - **Prerequisites for Media/Image conversions**:
     - Install via Windows Package Manager (`winget` in Terminal / PowerShell):
       ```powershell
@@ -128,7 +125,7 @@ Download the latest pre-built binaries directly from the [GitHub Releases](https
 
 ##### System Packages (Windows)
 - Visual Studio 2022 with C++ Desktop Development workload.
-- Qt 6.5+ (MSVC 2022 64-bit).
+- Qt 6.4+ (MSVC 2022 64-bit).
 - CMake 3.22+ and Ninja.
 - FFmpeg and ImageMagick (optional for document-only users, recommended):
   ```cmd
@@ -148,7 +145,7 @@ cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release
 # Build executable and test suite
 ninja -C build
 
-# Run automated tests (66 unit and integration tests across core, process runner, and engines)
+# Run automated tests (core/integration and Qt Widgets regression suites)
 ctest --test-dir build --output-on-failure
 
 # Launch application
@@ -176,19 +173,15 @@ scripts\package-windows.bat
 
 ## Usage Guide
 
-1. **Verify Engine Toolchains (Optional)**:
-   - On launch, the permanent status bar at the bottom displays real-time availability for all engines (`FFmpeg`, `Magick`, `Pandoc`).
-   - Open **Settings (⚙️)** in the header bar if you need to supply custom executable path overrides, configure output directory behavior, or set up automated Watch Folders.
-2. **Add Files**: Drag and drop any media, image, subtitle, or document files directly onto the drop zone, or click **Add Files**.
-3. **Select Target Format or Preset**:
-   - Choose an output format from the format selection dialog, pick from ready-made presets (*Discord*, *YouTube 1080p*, *High-Quality Animated GIF*, *Animated WebP*, *Lossless Audio*, *Web-ready Images*, *Markdown to PDF*), or click **+ New Preset** to build a custom recipe.
-   - For lossy image formats, an interactive before & after preview dialog lets you inspect quality and estimated size before confirming.
-4. **Automatic Conversion**:
-   - Conversion starts immediately upon format selection—no extra clicks required.
-   - Jobs execute concurrently in the batch queue with per-engine resource throttling (protecting GPU and memory bandwidth), real-time progress indicators, and cancellation support.
-5. **Inspect Output & History**:
-   - Double-click any completed job in the queue to reveal its output folder in your file manager.
-   - Open **History (📜)** to inspect execution metrics, duration, copy detailed command diagnostics to clipboard, click **Open Output Folder**, or retry failed jobs with 1-click.
+1. **Check tools**: Click **Tools: X/4 ready** for FFmpeg, ImageMagick, Pandoc, and PDF typesetter status. Configure custom paths in Settings.
+2. **Add files**: Drop files onto the landing area or use File → Open Files.
+3. **Review the batch**: Select rows and choose a format/preset. Review destinations and readiness. Resolve or remove blocked rows. Cancel starts no jobs; **Convert N Files** reserves unique output names and starts the batch.
+4. **Inspect progress**: The queue shows progress and elapsed time, with speed/ETA when the engine reports enough information. Right-click for Open Output, Open Folder, Retry, Cancel, or Details.
+5. **Inspect outcomes**: Summaries distinguish success, failure, cancellation, active work, and waiting jobs. History stores local diagnostics and retry options.
+6. **Automate**: Open **Watch Folders** to configure folders, destinations, presets, recursion, and post-actions. New folders keep originals by default. Pause clears pending candidates and cancels queued jobs; running jobs finish using their captured settings. Use Retry Failures after resolving a problem. Watching runs while the application is open.
+7. **Close safely**: During active conversion, choose Keep Open or Cancel Jobs and Exit. The application waits for workers to stop before destruction.
+
+The Discord preset uses a fixed video/audio bitrate; it does not guarantee an upload-size limit. Image previews are reduced-resolution engine samples; final size and appearance can vary with the full-resolution conversion and optimizer.
 
 
 ---

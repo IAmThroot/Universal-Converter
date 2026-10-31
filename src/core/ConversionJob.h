@@ -10,33 +10,17 @@
 
 namespace uc::core {
 
-enum class JobState {
-    Queued,
-    Preparing,
-    Running,
-    Completed,
-    Failed,
-    Cancelled
-};
+enum class JobState { Queued, Preparing, Running, Completed, Failed, Cancelled };
 
-enum class EngineType {
-    Unknown,
-    FFmpeg,
-    ImageMagick,
-    Pandoc
-};
+enum class EngineType { Unknown, FFmpeg, ImageMagick, Pandoc };
 
 class ConversionJob : public QObject {
     Q_OBJECT
 
-public:
-    explicit ConversionJob(const QString& id,
-                           const QStringList& inputPaths,
-                           const QString& inputFormatId,
-                           const QString& outputFormatId,
-                           const QString& destinationPath,
-                           EngineType engine = EngineType::Unknown,
-                           QObject* parent = nullptr);
+  public:
+    explicit ConversionJob(const QString &id, const QStringList &inputPaths, const QString &inputFormatId,
+                           const QString &outputFormatId, const QString &destinationPath,
+                           EngineType engine = EngineType::Unknown, QObject *parent = nullptr);
     ~ConversionJob() override = default;
 
     // Getters
@@ -67,31 +51,37 @@ public:
     void setFinishedHandled(bool handled) { m_finishedHandled = handled; }
 
     QVariantMap options() const { return m_options; }
-    void setOptions(const QVariantMap& options) { m_options = options; }
+    void setOptions(const QVariantMap &options) { m_options = options; }
 
     // State Transitions
-    bool transitionTo(JobState newState, const QString& message = QString());
+    bool transitionTo(JobState newState, const QString &message = QString());
 
     void requestCancellation();
-    void setProgress(int percentage, const QString& message = QString());
-    void setFinalOutputPath(const QString& path);
+    void setProgress(int percentage, const QString &message = QString());
+    void setFinalOutputPath(const QString &path);
     QString executedCommand() const { return m_executedCommand; }
-    void setExecutedCommand(const QString& cmd) { m_executedCommand = cmd; }
+    void setExecutedCommand(const QString &cmd) { m_executedCommand = cmd; }
 
     QString diagnosticOutput() const { return m_diagnosticOutput; }
-    void setDiagnosticOutput(const QString& diag) { m_diagnosticOutput = diag; }
+    void setDiagnosticOutput(const QString &diag) { m_diagnosticOutput = diag; }
 
     int retryCount() const { return m_retryCount; }
     void incrementRetryCount() { ++m_retryCount; }
 
-    void setError(const QString& errorMessage);
+    void setError(const QString &errorMessage);
+    double speed() const { return m_speed; }
+    qint64 etaSeconds() const { return m_etaSeconds; }
+    void setTelemetry(double speed, qint64 eta) {
+        m_speed = speed;
+        m_etaSeconds = eta;
+    }
 
-signals:
+  signals:
     void stateChanged(JobState newState, JobState oldState);
-    void progressChanged(int percentage, const QString& message);
+    void progressChanged(int percentage, const QString &message);
     void cancellationRequested();
 
-private:
+  private:
     bool isValidTransition(JobState from, JobState to) const;
 
     QString m_id;
@@ -118,6 +108,8 @@ private:
     QString m_executedCommand;
     QString m_diagnosticOutput;
     int m_retryCount{0};
+    double m_speed{0};
+    qint64 m_etaSeconds{-1};
 };
 
 QString jobStateToString(JobState state);

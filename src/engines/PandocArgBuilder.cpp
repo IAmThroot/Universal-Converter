@@ -3,31 +3,44 @@
 
 namespace uc::engines {
 
-QString PandocArgBuilder::mapExtensionToPandocFormat(const QString& ext) {
+QString PandocArgBuilder::mapExtensionToPandocFormat(const QString &ext) {
     const QString e = ext.toLower().remove('.');
-    if (e == "md" || e == "markdown") return "markdown";
-    if (e == "htm" || e == "html") return "html";
-    if (e == "tex" || e == "latex") return "latex";
-    if (e == "docx") return "docx";
-    if (e == "odt") return "odt";
-    if (e == "epub") return "epub";
-    if (e == "rst") return "rst";
-    if (e == "rtf") return "rtf";
-    if (e == "txt") return "markdown";
-    if (e == "pdf") return "pdf";
-    if (e == "adoc" || e == "asciidoc") return "asciidoc";
-    if (e == "org") return "org";
-    if (e == "textile") return "textile";
-    if (e == "wiki" || e == "mediawiki") return "mediawiki";
-    if (e == "opml") return "opml";
+    if (e == "md" || e == "markdown")
+        return "markdown";
+    if (e == "htm" || e == "html")
+        return "html";
+    if (e == "tex" || e == "latex")
+        return "latex";
+    if (e == "docx")
+        return "docx";
+    if (e == "odt")
+        return "odt";
+    if (e == "epub")
+        return "epub";
+    if (e == "rst")
+        return "rst";
+    if (e == "rtf")
+        return "rtf";
+    if (e == "txt")
+        return "markdown";
+    if (e == "pdf")
+        return "pdf";
+    if (e == "adoc" || e == "asciidoc")
+        return "asciidoc";
+    if (e == "org")
+        return "org";
+    if (e == "textile")
+        return "textile";
+    if (e == "wiki" || e == "mediawiki")
+        return "mediawiki";
+    if (e == "opml")
+        return "opml";
     return e;
 }
 
-PandocArgumentResult PandocArgBuilder::buildArguments(const QString& inputPath,
-                                                     const QString& outputPath,
-                                                     const DocumentConversionOptions& options,
-                                                     const PandocCapabilities& capabilities)
-{
+PandocArgumentResult PandocArgBuilder::buildArguments(const QString &inputPath, const QString &outputPath,
+                                                      const DocumentConversionOptions &options,
+                                                      const PandocCapabilities &capabilities) {
     PandocArgumentResult result;
 
     if (inputPath.isEmpty() || outputPath.isEmpty()) {
@@ -43,14 +56,15 @@ PandocArgumentResult PandocArgBuilder::buildArguments(const QString& inputPath,
     const QString inExt = QFileInfo(inputPath).suffix();
     const QString outExt = QFileInfo(outputPath).suffix();
 
-    const QString fromFormat = options.customInputFormat.isEmpty() ?
-                                   mapExtensionToPandocFormat(inExt) : options.customInputFormat;
-    const QString toFormat = mapExtensionToPandocFormat(outExt);
+    const QString fromFormat =
+        options.customInputFormat.isEmpty() ? mapExtensionToPandocFormat(inExt) : options.customInputFormat;
+    const QString toFormat = outExt.toLower() == "txt" ? "plain" : mapExtensionToPandocFormat(outExt);
 
     // PDF Output Verification
     if (toFormat == "pdf") {
         if (!capabilities.hasAnyPdfEngine()) {
-            result.errorMessage = "PDF conversion requires an external PDF engine (e.g. Typst, XeLaTeX, or wkhtmltopdf). None were detected on this system.";
+            result.errorMessage = "PDF conversion requires an external PDF engine (e.g. Typst, XeLaTeX, or "
+                                  "wkhtmltopdf). None were detected on this system.";
             return result;
         }
     }
@@ -92,7 +106,7 @@ PandocArgumentResult PandocArgBuilder::buildArguments(const QString& inputPath,
     if (toFormat == "pdf") {
         PdfEngineInfo engineInfo;
         if (options.pdfEngine != PdfEngineType::None) {
-            for (const auto& eng : capabilities.availablePdfEngines()) {
+            for (const auto &eng : capabilities.availablePdfEngines()) {
                 if (eng.type == options.pdfEngine && eng.isAvailable) {
                     engineInfo = eng;
                     break;

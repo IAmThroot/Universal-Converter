@@ -8,7 +8,7 @@
 namespace uc::engines {
 
 struct ImageFormatMode {
-    QString format;       // Upper-case tag, e.g. "PNG", "JPEG", "CR2"
+    QString format; // Upper-case tag, e.g. "PNG", "JPEG", "CR2"
     bool canRead{false};
     bool canWrite{false};
     bool supportsMultiFrame{false};
@@ -16,15 +16,16 @@ struct ImageFormatMode {
 };
 
 class ImageMagickCapabilities {
-public:
-    static ImageMagickCapabilities& instance();
+  public:
+    static ImageMagickCapabilities &instance();
+    ImageMagickCapabilities() = default;
 
     bool isDiscovered() const { return m_isDiscovered; }
-    void discover(const QString& magickExecutablePath);
+    void discover(const QString &magickExecutablePath);
 
-    bool canReadFormat(const QString& formatOrExt) const;
-    bool canWriteFormat(const QString& formatOrExt) const;
-    bool supportsAnimation(const QString& formatOrExt) const;
+    bool canReadFormat(const QString &formatOrExt) const;
+    bool canWriteFormat(const QString &formatOrExt) const;
+    bool supportsAnimation(const QString &formatOrExt) const;
 
     int totalRecognizedFormats() const { return m_formats.size(); }
     int readableFormatCount() const { return m_readableFormats.size(); }
@@ -33,9 +34,7 @@ public:
     QString versionString() const { return m_versionString; }
     QString delegateInfo() const { return m_delegateInfo; }
 
-private:
-    ImageMagickCapabilities() = default;
-
+  private:
     bool m_isDiscovered{false};
     QString m_versionString;
     QString m_delegateInfo;

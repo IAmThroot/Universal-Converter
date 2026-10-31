@@ -5,6 +5,14 @@ All notable changes to Universal Converter will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.6] - 2026-11-01
+
+- Repair cancellation during worker stages, shutdown ordering, retry state, and output collision protection.
+- Add batch review before conversion, route readiness reasons, queue progress/actions, and distinct outcome counts.
+- Add a dedicated watch-folder manager with safe archive names, pause semantics, recursive reconciliation, and failure retry.
+- Use actual image-engine samples for asynchronous previews and unify dark styling and keyboard focus.
+- Isolate test persistence, add core/UI regressions, and derive displayed versions from CMake.
+
 ## [1.1.5] - 2026-10-20
 
 ### Added

@@ -5,42 +5,41 @@
 #include "../engines/PandocCapabilities.h"
 #include <QFileInfo>
 #include <QThreadPool>
+#include <QThread>
 
 namespace uc::app {
 
-ToolchainManager& ToolchainManager::instance() {
+ToolchainManager &ToolchainManager::instance() {
     static ToolchainManager s_instance;
     return s_instance;
 }
 
-ToolchainManager::ToolchainManager(QObject* parent)
-    : QObject(parent)
-{
-}
+ToolchainManager::ToolchainManager(QObject *parent) : QObject(parent) { m_scanPool.setMaxThreadCount(1); }
 
 void ToolchainManager::scanAllAsync() {
     {
         QMutexLocker locker(&m_mutex);
         m_isScanning = true;
+        ++m_pendingScans;
     }
     emit toolchainStatusChanged();
 
-    const auto& settings = AppSettings::instance();
+    const auto &settings = AppSettings::instance();
     QString ffmpeg = settings.ffmpegPathOverride();
     QString magick = settings.magickPathOverride();
     QString pandoc = settings.pandocPathOverride();
 
-    QThreadPool::globalInstance()->start([this, ffmpeg, magick, pandoc]() {
-        scanAll(ffmpeg, magick, pandoc);
-    });
+    m_scanPool.start([this, ffmpeg, magick, pandoc]() { scanAll(ffmpeg, magick, pandoc); });
 }
 
 void ToolchainManager::scanAll() {
-    const auto& settings = AppSettings::instance();
+    const auto &settings = AppSettings::instance();
     scanAll(settings.ffmpegPathOverride(), settings.magickPathOverride(), settings.pandocPathOverride());
 }
 
-void ToolchainManager::scanAll(const QString& ffmpegOverride, const QString& magickOverride, const QString& pandocOverride) {
+void ToolchainManager::scanAll(const QString &ffmpegOverride, const QString &magickOverride,
+                               const QString &pandocOverride) {
+    QMutexLocker scanLock(&m_scanMutex);
     // 1. Resolve FFmpeg
     auto ffmpeg = EngineResolver::resolve("ffmpeg", ffmpegOverride, "-version");
 
@@ -71,30 +70,42 @@ void ToolchainManager::scanAll(const QString& ffmpegOverride, const QString& mag
     auto oxipng = EngineResolver::resolve("oxipng", QString(), "--version");
     auto pngquant = EngineResolver::resolve("pngquant", QString(), "--version");
 
-    {
-        QMutexLocker locker(&m_mutex);
-        m_ffmpeg = ffmpeg;
-        m_ffprobe = ffprobe;
-        m_magick = magick;
-        m_pandoc = pandoc;
-        m_rsvgConvert = rsvgConvert;
-        m_avifenc = avifenc;
-        m_cwebp = cwebp;
-        m_oxipng = oxipng;
-        m_pngquant = pngquant;
-        m_isScanning = false;
-    }
-
-    // Warm capabilities probes while on worker thread
-    core::SystemInfo::probe();
-    if (magick.isAvailable) {
-        engines::ImageMagickCapabilities::instance().discover(magick.executablePath);
-    }
-    if (pandoc.isAvailable) {
-        engines::PandocCapabilities::instance().discover(pandoc.executablePath);
-    }
-
-    QMetaObject::invokeMethod(this, &ToolchainManager::toolchainStatusChanged, Qt::QueuedConnection);
+    engines::ImageMagickCapabilities imageCaps;
+    engines::PandocCapabilities documentCaps;
+    if (magick.isAvailable)
+        imageCaps.discover(magick.executablePath);
+    if (pandoc.isAvailable)
+        documentCaps.discover(pandoc.executablePath);
+    auto publish = [this, ffmpeg, ffprobe, magick, pandoc, rsvgConvert, avifenc, cwebp, oxipng, pngquant,
+                    imageCaps, documentCaps]() {
+        {
+            QMutexLocker locker(&m_mutex);
+            // Queued scans run in order; publish only the last requested snapshot.
+            if (m_pendingScans > 1) {
+                --m_pendingScans;
+                return;
+            }
+            m_ffmpeg = ffmpeg;
+            m_ffprobe = ffprobe;
+            m_magick = magick;
+            m_pandoc = pandoc;
+            m_rsvgConvert = rsvgConvert;
+            m_avifenc = avifenc;
+            m_cwebp = cwebp;
+            m_oxipng = oxipng;
+            m_pngquant = pngquant;
+            if (m_pendingScans > 0)
+                --m_pendingScans;
+            m_isScanning = false;
+        }
+        engines::ImageMagickCapabilities::instance() = imageCaps;
+        engines::PandocCapabilities::instance() = documentCaps;
+        emit toolchainStatusChanged();
+    };
+    if (QThread::currentThread() == thread())
+        publish();
+    else
+        QMetaObject::invokeMethod(this, publish, Qt::QueuedConnection);
 }
 
 } // namespace uc::app

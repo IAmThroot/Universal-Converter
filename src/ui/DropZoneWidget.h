@@ -10,25 +10,26 @@ namespace uc::ui {
 class DropZoneWidget : public QWidget {
     Q_OBJECT
 
-public:
-    explicit DropZoneWidget(QWidget* parent = nullptr);
+  public:
+    explicit DropZoneWidget(QWidget *parent = nullptr);
 
-signals:
-    void filesDropped(const QStringList& filePaths);
+  signals:
+    void filesDropped(const QStringList &filePaths);
     void clicked();
 
-protected:
-    void dragEnterEvent(QDragEnterEvent* event) override;
-    void dragLeaveEvent(QDragLeaveEvent* event) override;
-    void dropEvent(QDropEvent* event) override;
-    void mousePressEvent(QMouseEvent* event) override;
+  protected:
+    void keyPressEvent(QKeyEvent *event) override;
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dragLeaveEvent(QDragLeaveEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
 
-private:
+  private:
     void setHoverState(bool hovered);
 
-    QLabel* m_iconLabel;
-    QLabel* m_titleLabel;
-    QLabel* m_subtitleLabel;
+    QLabel *m_iconLabel;
+    QLabel *m_titleLabel;
+    QLabel *m_subtitleLabel;
 };
 
 } // namespace uc::ui

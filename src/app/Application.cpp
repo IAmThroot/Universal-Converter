@@ -6,14 +6,12 @@
 
 namespace uc::app {
 
-Application::Application(int& argc, char** argv)
-    : QApplication(argc, argv)
-{
+Application::Application(int &argc, char **argv) : QApplication(argc, argv) {
     setApplicationName("UniversalConverter");
     setApplicationDisplayName("Universal Converter");
     setOrganizationName("UniversalConverter");
     setOrganizationDomain("universal-converter.local");
-    setApplicationVersion("1.1.5");
+    setApplicationVersion(UC_VERSION);
     setWindowIcon(ui::appIcon());
     setDesktopFileName("universal-converter");
 }
