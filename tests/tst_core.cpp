@@ -1,5 +1,6 @@
 #include <QTest>
 #include <QGuiApplication>
+#include <QScopeGuard>
 #include <QStandardPaths>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -1300,8 +1301,10 @@ void CoreTests::testRealPandocConversionsEndToEnd() {
         qWarning() << "executeJob failed with error:" << jobPdf->errorMessage();
     }
     QVERIFY(ok);
-    QVERIFY(pdfSpy.wait(8000));
-    QCOMPARE(jobPdf->state(), JobState::Completed);
+    // Cold font discovery on Windows runners can take longer than eight seconds.
+    QTRY_VERIFY_WITH_TIMEOUT(!pdfSpy.isEmpty(), 60000);
+    QVERIFY2(jobPdf->state() == JobState::Completed,
+             qPrintable(jobPdf->errorMessage() + "\n" + jobPdf->diagnosticOutput()));
     QVERIFY(QFile::exists(pdfFile));
 
     auto valPdf = DocumentValidator::validate(pdfFile, "pdf");
@@ -1380,16 +1383,32 @@ void CoreTests::testEngineResolverSystemFallback() {
     QTemporaryDir emptyAppDir;
     QVERIFY(emptyAppDir.isValid());
 
-    // ffmpeg exists on this system in system PATH
-    auto res = EngineResolver::resolve("ffmpeg", QString(), "-version", emptyAppDir.path());
-    QVERIFY(res.isAvailable);
-    QCOMPARE(res.source, ToolSource::SystemPath);
+    // A private PATH fixture tests resolution without requiring host FFmpeg.
+    QTemporaryDir tools;
+    QVERIFY(tools.isValid());
 #ifdef Q_OS_WIN
-    QVERIFY(res.executablePath.endsWith("ffmpeg.exe", Qt::CaseInsensitive) ||
-            res.executablePath.endsWith("ffmpeg", Qt::CaseInsensitive));
+    const QString name = "uc_path_probe.bat";
+    const QByteArray script = "@echo path_probe version 1.0\r\n@exit /b 0\r\n";
 #else
-    QVERIFY(res.executablePath.endsWith("ffmpeg"));
+    const QString name = "uc_path_probe";
+    const QByteArray script = "#!/bin/sh\necho 'path_probe version 1.0'\n";
 #endif
+    const QString executable = tools.filePath(name);
+    QFile fixture(executable);
+    QVERIFY(fixture.open(QIODevice::WriteOnly));
+    QCOMPARE(fixture.write(script), qint64(script.size()));
+    fixture.close();
+#ifndef Q_OS_WIN
+    QVERIFY(QFile::setPermissions(executable, QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner));
+#endif
+    const QByteArray oldPath = qgetenv("PATH");
+    auto restorePath = qScopeGuard([oldPath] { qputenv("PATH", oldPath); });
+    qputenv("PATH", tools.path().toLocal8Bit() + QDir::listSeparator().toLatin1() + oldPath);
+    auto res = EngineResolver::resolve(name, QString(), "-version", emptyAppDir.path());
+    QVERIFY2(res.isAvailable, qPrintable(res.failureReason));
+    QCOMPARE(res.source, ToolSource::SystemPath);
+    QCOMPARE(QFileInfo(res.executablePath).canonicalFilePath(), QFileInfo(executable).canonicalFilePath());
+    QCOMPARE(res.version, QString("path_probe version 1.0"));
 }
 
 void CoreTests::testEngineResolverMissingReportsError() {
@@ -1600,11 +1619,20 @@ void CoreTests::testEngineCapabilityResolverDistinction() {
 
     const auto capMp4 = resolver.resolveFormat("mp4");
     QCOMPARE(capMp4.definition.id, QString("mp4"));
-    QVERIFY(capMp4.readiness == FormatReadiness::Verified || capMp4.readiness == FormatReadiness::Available);
+    if (uc::app::ToolchainManager::instance().ffmpeg().isAvailable) {
+        QVERIFY(capMp4.readiness == FormatReadiness::Verified || capMp4.readiness == FormatReadiness::Available);
+    } else {
+        QCOMPARE(capMp4.readiness, FormatReadiness::Recognized);
+        QVERIFY(!capMp4.isReadableOnHost);
+        QVERIFY(!capMp4.isWritableOnHost);
+    }
 
     const auto capPng = resolver.resolveFormat("png");
     QCOMPARE(capPng.definition.id, QString("png"));
-    QVERIFY(capPng.readiness == FormatReadiness::Verified || capPng.readiness == FormatReadiness::Available);
+    if (capPng.isReadableOnHost || capPng.isWritableOnHost)
+        QVERIFY(capPng.readiness == FormatReadiness::Verified || capPng.readiness == FormatReadiness::Available);
+    else
+        QCOMPARE(capPng.readiness, FormatReadiness::Recognized);
 
     const auto capPdf = resolver.resolveFormat("pdf");
     QCOMPARE(capPdf.definition.id, QString("pdf"));
@@ -2188,6 +2216,9 @@ void CoreTests::testVideoToAnimatedImageArgBuilder() {
 
 void CoreTests::testRealVideoToAnimatedConversionsEndToEnd() {
     using namespace uc::engines;
+    const auto& toolchain = uc::app::ToolchainManager::instance();
+    if (!toolchain.ffmpeg().isAvailable || !toolchain.ffprobe().isAvailable)
+        QSKIP("Animated integration requires FFmpeg and FFprobe");
     QTemporaryDir tempDir;
     QVERIFY(tempDir.isValid());
 
@@ -2199,7 +2230,7 @@ void CoreTests::testRealVideoToAnimatedConversionsEndToEnd() {
 
     // Generate a quick 1.5s synthetic MP4 clip
     const auto genRes =
-        ProcessRunner::executeSync("ffmpeg",
+        ProcessRunner::executeSync(toolchain.ffmpeg().executablePath,
                                    {"-f", "lavfi", "-i", "testsrc=duration=1.5:size=320x240:rate=10", "-c:v",
                                     "libx264", "-pix_fmt", "yuv420p", "-y", inMp4},
                                    10000);
