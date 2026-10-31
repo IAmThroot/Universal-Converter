@@ -146,6 +146,8 @@ set(APP_SOURCES
     src/ui/WatchFoldersDialog.h
     src/ui/BatchSetupDialog.cpp
     src/ui/BatchSetupDialog.h
+    src/ui/DesktopIntegration.cpp
+    src/ui/DesktopIntegration.h
     src/ui/MainWindow.cpp
     src/ui/MainWindow.h
     src/ui/DropZoneWidget.cpp

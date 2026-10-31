@@ -2,7 +2,7 @@
 #include <QHeaderView>
 #include <QFileInfo>
 #include <QSet>
-#include <QDesktopServices>
+#include "DesktopIntegration.h"
 #include <QUrl>
 #include <QTimer>
 #include <QProgressBar>
@@ -102,9 +102,9 @@ void QueueViewWidget::setupUi() {
         auto *details = menu.addAction("Details");
         auto *action = menu.exec(m_treeWidget->viewport()->mapToGlobal(pos));
         if (action == open)
-            QDesktopServices::openUrl(QUrl::fromLocalFile(job->finalOutputPath()));
+            DesktopIntegration::openLocalPath(this,job->finalOutputPath());
         if (action == folder)
-            QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(job->finalOutputPath()).absolutePath()));
+            DesktopIntegration::openLocalPath(this,QFileInfo(job->finalOutputPath()).absolutePath());
         if (action == cancel)
             m_orchestrator->cancelJob(job->id());
         if (action == retry) {
@@ -153,7 +153,7 @@ void QueueViewWidget::setupUi() {
         if (job && job->state() == core::JobState::Completed) {
             const QString path = job->finalOutputPath();
             if (QFile::exists(path)) {
-                QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
+                DesktopIntegration::openLocalPath(this,QFileInfo(path).absolutePath());
             }
         }
     });

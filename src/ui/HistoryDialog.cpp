@@ -3,7 +3,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QFileInfo>
-#include <QDesktopServices>
+#include "DesktopIntegration.h"
 #include <QUrl>
 #include <QMessageBox>
 #include <QClipboard>
@@ -167,11 +167,11 @@ void HistoryDialog::onOpenOutputClicked() {
         return;
 
     const auto &rec = m_records[row];
-    if (!rec.finalOutputPath.isEmpty() && QFile::exists(rec.finalOutputPath)) {
-        QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(rec.finalOutputPath).absolutePath()));
+    if (!rec.finalOutputPath.isEmpty()) {
+        DesktopIntegration::openLocalPath(this,QFileInfo(rec.finalOutputPath).absolutePath());
     } else {
         QMessageBox::information(this, "File Not Found",
-                                 "Output file no longer exists or conversion failed.");
+                                 "This record has no output path.");
     }
 }
 

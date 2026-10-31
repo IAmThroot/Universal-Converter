@@ -137,6 +137,10 @@ EOF
 cat << 'EOF' > "${APPDIR}/AppRun"
 #!/bin/sh
 HERE="$(dirname "$(readlink -f "${0}")")"
+export UC_APPDIR="${HERE}"
+export UC_ORIGINAL_PATH="${PATH}"
+export UC_ORIGINAL_QT_PLUGIN_PATH="${QT_PLUGIN_PATH}"
+export UC_ORIGINAL_QML2_IMPORT_PATH="${QML2_IMPORT_PATH}"
 export ORIGINAL_LD_LIBRARY_PATH="${LD_LIBRARY_PATH}"
 export PATH="${HERE}/usr/bin:${PATH}"
 export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH}"
