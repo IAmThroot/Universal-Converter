@@ -138,7 +138,17 @@ jobs:
         shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ctest --test-dir build -C Release --output-on-failure
+        run: ctest --test-dir build -C Release --verbose --output-on-failure
+
+      - name: Upload Windows test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-diagnostics
+          path: |
+            build/Testing/Temporary/
+            build/*-results.xml
+          if-no-files-found: ignore
 
       - name: Package with CPack (NSIS Installer + Portable ZIP)
         shell: bash
@@ -182,13 +192,29 @@ jobs:
       - uses: actions/checkout@v4
       - name: Dependencies
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build qt6-base-dev libqt6svg6-dev ffmpeg imagemagick pandoc librsvg2-bin
+      - name: Install PDF typesetter
+        run: |
+          mkdir -p engines/typst
+          curl --fail --location --retry 3 https://github.com/typst/typst/releases/download/v0.12.0/typst-x86_64-unknown-linux-musl.tar.xz -o "$RUNNER_TEMP/typst.tar.xz"
+          tar -xJf "$RUNNER_TEMP/typst.tar.xz" -C "$RUNNER_TEMP"
+          install -m 755 "$RUNNER_TEMP/typst-x86_64-unknown-linux-musl/typst" engines/typst/typst
+          engines/typst/typst --version
       - name: Build and test
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
           cmake -S . -B build -G Ninja -DENABLE_SANITIZERS=ON -DCMAKE_BUILD_TYPE=Debug
           cmake --build build --parallel 2
-          ctest --test-dir build --output-on-failure
+          ctest --test-dir build --verbose --output-on-failure
+      - name: Upload sanitizer test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanitizer-test-diagnostics
+          path: |
+            build/Testing/Temporary/
+            build/*-results.xml
+          if-no-files-found: ignore
 
   release:
     name: Publish GitHub Release
@@ -202,6 +228,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: release-assets
+          pattern: UniversalConverter-*
 
       - name: Stage release files
         run: |

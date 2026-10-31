@@ -1,4 +1,5 @@
 #include <QTest>
+#include <QGuiApplication>
 #include <QStandardPaths>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -1282,6 +1283,11 @@ void CoreTests::testRealPandocConversionsEndToEnd() {
     auto valDocx = DocumentValidator::validate(docxFile, "docx");
     QVERIFY(valDocx.isValid);
 
+    // HTML/DOCX do not require a PDF typesetter. Minimal host installations
+    // must still exercise those routes, then report the unavailable PDF case.
+    if (!PandocCapabilities::instance().hasAnyPdfEngine())
+        QSKIP("HTML/DOCX passed; PDF integration requires an installed typesetter");
+
     // 3. Markdown to PDF (via Typst)
     const QString pdfFile = tempDir.filePath("output.pdf");
     auto jobPdf = std::make_shared<ConversionJob>("job-doc-pdf", QStringList{mdFile}, "md", "pdf",
@@ -1806,6 +1812,7 @@ void CoreTests::testVectorPipelineQtSvgFallbackRasterization() {
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"100\" viewBox=\"0 0 200 100\">\n"
         "  <rect width=\"200\" height=\"100\" fill=\"blue\" />\n"
         "  <circle cx=\"100\" cy=\"50\" r=\"30\" fill=\"yellow\" />\n"
+        "  <text x=\"4\" y=\"94\" font-size=\"10\">SVG font check</text>\n"
         "</svg>\n";
     svgFile.write(svgData);
     svgFile.close();
@@ -2461,5 +2468,10 @@ void CoreTests::testWatchOriginalProtection() {
     QVERIFY(watch.activity(cfg.id).contains("changed"));
 }
 
-QTEST_GUILESS_MAIN(CoreTests)
+// SVG rendering uses Qt's platform font database, including on Windows.
+int main(int argc, char** argv) {
+    QGuiApplication app(argc, argv);
+    CoreTests tests;
+    return QTest::qExec(&tests, argc, argv);
+}
 #include "tst_core.moc"
