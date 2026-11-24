@@ -1,4 +1,5 @@
 #include <QtTest>
+#include <cstdio>
 #include <QScopeGuard>
 #include <QMenu>
 #include <QMessageBox>
@@ -170,11 +171,18 @@ class UiTests : public QObject {
         auto env = QProcessEnvironment::systemEnvironment();
         env.insert("UC_DESKTOP_TEST_DIRECTORY", m_data.path());
         child.setProcessEnvironment(env);
+        child.setProcessChannelMode(QProcess::MergedChannels);
         child.start(QCoreApplication::applicationFilePath(),
                     {m_data.filePath("one image.png"), m_data.filePath("two.md")});
-        QVERIFY(child.waitForFinished(20000));
-        QCOMPARE(child.exitStatus(), QProcess::NormalExit);
-        QCOMPARE(child.exitCode(), 0);
+        QVERIFY2(child.waitForStarted(), qPrintable(child.errorString()));
+        const bool finished = child.waitForFinished(20000);
+        if (!finished) {
+            child.kill();
+            child.waitForFinished();
+        }
+        const QByteArray log = child.readAll();
+        QVERIFY2(finished, ("Startup child timed out. " + log).constData());
+        QVERIFY2(child.exitStatus() == QProcess::NormalExit && child.exitCode() == 0, log.constData());
     }
 
     void blockedRouteHasReason() {
@@ -475,8 +483,16 @@ int main(int argc, char **argv) {
         application.setProperty("testDataDirectory", qEnvironmentVariable("UC_DESKTOP_TEST_DIRECTORY"));
         if (!application.init())
             return 1;
+        std::fprintf(stderr, "Startup initialized.\n");
+        QTimer checkStartup;
         int result = 2;
-        QTimer::singleShot(50, &application, [&]() {
+        bool reviewed = false;
+        QObject::connect(&checkStartup, &QTimer::timeout, &application, [&]() {
+            if (reviewed) {
+                if (!app::ToolchainManager::instance().isScanning())
+                    application.quit();
+                return;
+            }
             auto *batch = qobject_cast<ui::BatchSetupDialog *>(QApplication::activeModalWidget());
             if (batch) {
                 QStringList sources;
@@ -484,10 +500,12 @@ int main(int argc, char **argv) {
                     sources << entry.input;
                 if (sources == application.arguments().mid(1))
                     result = 0;
+                reviewed = true;
+                std::fprintf(stderr, "Batch reviewed, argument match: %d.\n", result == 0);
                 batch->reject();
             }
-            application.quit();
         });
+        checkStartup.start(25);
         application.exec();
         return result;
     }
