@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 project(UniversalConverter
-    VERSION 1.1.6
+    VERSION 1.1.7
     DESCRIPTION "High-performance, standalone, offline cross-platform media and document converter"
     LANGUAGES CXX
 )
@@ -238,7 +238,7 @@ if(BUILD_TESTING)
     add_test(NAME tst_core COMMAND tst_core -o -,txt -o core-results.xml,junitxml)
     set_tests_properties(tst_core PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     set(UI_TEST_SOURCES ${APP_SOURCES})
-    list(REMOVE_ITEM UI_TEST_SOURCES src/main.cpp src/app/Application.cpp src/app/Application.h)
+    list(REMOVE_ITEM UI_TEST_SOURCES src/main.cpp)
     add_executable(tst_ui tests/tst_ui.cpp ${UI_TEST_SOURCES} ${APP_RESOURCES})
     target_link_libraries(tst_ui PRIVATE converter_core Qt6::Widgets Qt6::Test)
     target_compile_definitions(tst_ui PRIVATE UC_VERSION="${PROJECT_VERSION}")

@@ -22,10 +22,10 @@ echo "Staging Dir:  ${APPDIR}"
 # 1. Compile project
 echo "--> Compiling Universal Converter..."
 if [ -d "${BUILD_DIR}" ]; then
-    cmake --build "${BUILD_DIR}" --config Release -j"$(nproc)"
+    cmake --build "${BUILD_DIR}" --config Release --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc)}"
 else
     cmake -B "${BUILD_DIR}" -S "${PROJECT_ROOT}" -DCMAKE_BUILD_TYPE=Release
-    cmake --build "${BUILD_DIR}" --config Release -j"$(nproc)"
+    cmake --build "${BUILD_DIR}" --config Release --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc)}"
 fi
 
 # 2. Prepare AppDir layout
@@ -193,7 +193,11 @@ echo "--> AppDir staging complete at ${APPDIR}."
 # 8. Check for appimagetool to produce the final .AppImage binary
 if command -v appimagetool >/dev/null 2>&1; then
     echo "--> Packaging AppImage binary..."
-    appimagetool "${APPDIR}" "${DIST_DIR}/UniversalConverter-x86_64.AppImage"
+    runtime_args=()
+    if [[ -n "${APPIMAGE_RUNTIME_FILE:-}" ]]; then
+        runtime_args=(--runtime-file "$APPIMAGE_RUNTIME_FILE")
+    fi
+    appimagetool "${runtime_args[@]}" "${APPDIR}" "${DIST_DIR}/UniversalConverter-x86_64.AppImage"
     echo "--> AppImage created: ${DIST_DIR}/UniversalConverter-x86_64.AppImage"
 else
     echo "--> NOTE: 'appimagetool' is not present in PATH."

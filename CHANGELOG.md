@@ -5,6 +5,23 @@ All notable changes to Universal Converter will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.7] - 2026-11-24
+
+### Changed
+
+- On upgrade, existing watch folders record the files already present, including files in paused watches. Newly added watches still process existing eligible files.
+- Watch folders remember unchanged originals across restarts and large batches. Directory scans run in the background, and the queue retains the latest 200 finished automated jobs.
+- The README format table now comes from the application's format registry. Removed unused probes for the standalone WebP and AVIF encoders.
+
+### Fixed
+
+- Watch-folder setup rejects blank paths. A watch pauses if it cannot save its processing history.
+- Queue and history retries use the original output directory. Clearing an earlier job preserves the retry's filename reservation.
+- Corrected FFmpeg readiness checks for AAC and M4B, codec selection for audio-to-WebM conversion, and audio bitrate handling in video exports.
+- Image-to-PDF readiness checks the image conversion tools. Converting an animated image to a single still exports its first frame and cleans up temporary output.
+- Selecting a preset keeps its target and options together, including same-format compression. Image previews open at the selected quality and update the estimate when accepted.
+- Opening multiple files from a Linux file manager now brings them into one batch review.
+
 ## [1.1.6] - 2026-11-01
 
 - Repair cancellation during worker stages, shutdown ordering, retry state, and output collision protection.

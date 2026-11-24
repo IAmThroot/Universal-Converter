@@ -6,11 +6,16 @@
 #include "JobFactory.h"
 #include "../app/ToolchainManager.h"
 #include <QDir>
-#include <QDirIterator>
 #include <QFileInfo>
 #include <QDateTime>
 #include <QUuid>
-#include <algorithm>
+#include <QCoreApplication>
+#include <QStandardPaths>
+#include <QSaveFile>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QCryptographicHash>
+#include <filesystem>
 
 namespace uc::core {
 
@@ -24,72 +29,144 @@ WatchFolderService::WatchFolderService(ConversionOrchestrator *orchestrator, QOb
     m_pollTimer.start();
 }
 
-WatchFolderService::~WatchFolderService() { m_pollTimer.stop(); }
+WatchFolderService::~WatchFolderService() { m_scanPool.waitForDone(); }
 
-void WatchFolderService::addFolder(const WatchFolderConfig &config) {
-    if (config.folderPath.isEmpty() || !QDir(config.folderPath).exists()) {
-        return;
+static QString stateFile(const QString &id) {
+    QString dir = QCoreApplication::instance()->property("testDataDirectory").toString();
+    if (dir.isEmpty())
+        dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    dir = QDir(dir).filePath("watch-state");
+    QDir().mkpath(dir);
+    return QDir(dir).filePath(QCryptographicHash::hash(id.toUtf8(), QCryptographicHash::Sha256).toHex() +
+                              ".json");
+}
+
+bool WatchFolderService::saveState(const WatchFolderConfig &cfg) {
+    QSaveFile file(stateFile(cfg.id));
+    const auto data =
+        QJsonDocument(QJsonObject{{"root", cfg.folderPath}, {"files", m_processedFiles.value(cfg.id)}})
+            .toJson(QJsonDocument::Compact);
+    return file.open(QIODevice::WriteOnly) && file.write(data) == data.size() && file.commit();
+}
+
+void WatchFolderService::pauseWithError(const QString &id, const QString &message) {
+    m_storageBlocked.insert(id);
+    setFolderEnabled(id, false);
+    m_activity[id] = m_lastError = message;
+    emit watchStatusChanged();
+}
+
+static bool containsPath(const QString &directory, const QString &path) {
+    const auto relative = QDir(directory).relativeFilePath(path);
+    return !QDir::isAbsolutePath(relative) && relative != ".." && !relative.startsWith("../");
+}
+
+static QString destinationRoot(const WatchFolderConfig &cfg) {
+    const QFileInfo dest(cfg.destinationFolder.isEmpty() ? QDir(cfg.folderPath).filePath("converted")
+                                                         : cfg.destinationFolder);
+    return dest.exists() ? dest.canonicalFilePath() : QDir::cleanPath(dest.absoluteFilePath());
+}
+
+bool WatchFolderService::addFolder(const WatchFolderConfig &config, bool restored) {
+    auto cfg = config;
+    const QFileInfo root(cfg.folderPath);
+    if (cfg.folderPath.trimmed().isEmpty() || (!root.isDir() && !(restored && root.isAbsolute()))) {
+        m_lastError = "Choose an existing watch folder.";
+        return false;
     }
-
-    WatchFolderConfig cfg = config;
-    if (cfg.id.isEmpty()) {
-        cfg.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    }
-
-    const QString root = QDir(cfg.folderPath).canonicalPath();
-    for (const auto &existing : m_folders) {
-        const QString other = QDir(existing.folderPath).canonicalPath();
-        if (existing.id != cfg.id &&
-            (root == other || root.startsWith(other + '/') || other.startsWith(root + '/'))) {
+    cfg.folderPath = root.isDir() ? root.canonicalFilePath() : root.absoluteFilePath();
+    for (const auto &other : m_folders) {
+        if (other.id != cfg.id && (containsPath(other.folderPath, cfg.folderPath) ||
+                                   containsPath(cfg.folderPath, other.folderPath))) {
             m_lastError = "Watch folders must not overlap.";
-            emit watchStatusChanged();
-            return;
+            return false;
         }
     }
-    m_folders.insert(cfg.id, cfg);
-    m_pathToFolderId.insert(QDir(cfg.folderPath).canonicalPath(), cfg.id);
-
-    if (cfg.isEnabled) {
-        m_watcher.addPath(cfg.folderPath);
+    if (!restored && containsPath(destinationRoot(cfg), cfg.folderPath)) {
+        m_lastError =
+            "The output directory contains the watch folder. Choose a separate destination or a subfolder.";
+        return false;
     }
-
-    rebuildWatches();
-    emit watchStatusChanged();
+    if (cfg.id.isEmpty())
+        cfg.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const bool sameRoot = hasFolder(cfg.id) && m_folders.value(cfg.id).folderPath == cfg.folderPath;
+    if (hasFolder(cfg.id)) {
+        clearPending(cfg.id);
+        unwatch(cfg.id);
+    }
+    ++m_generation[cfg.id];
+    m_folders[cfg.id] = cfg;
+    m_lastError.clear();
+    if (!sameRoot) {
+        m_storageBlocked.remove(cfg.id);
+        m_processedFiles.remove(cfg.id);
+        m_failedFiles.remove(cfg.id);
+        m_needsBaseline.remove(cfg.id);
+        QFile file(stateFile(cfg.id));
+        if (restored && file.exists()) {
+            const auto obj = file.open(QIODevice::ReadOnly) ? QJsonDocument::fromJson(file.readAll()).object()
+                                                            : QJsonObject{};
+            if (obj.value("root") == cfg.folderPath && obj.value("files").isObject()) {
+                m_processedFiles[cfg.id] = obj.value("files").toObject();
+            } else {
+                m_needsBaseline.insert(cfg.id);
+                pauseWithError(cfg.id, "Cannot read watch history. Resume to baseline existing files.");
+                return true;
+            }
+        } else if (restored) {
+            m_needsBaseline.insert(cfg.id);
+        } else if (!saveState(cfg)) {
+            m_needsBaseline.insert(cfg.id);
+            pauseWithError(cfg.id, "Cannot save watch history. Check application data permissions.");
+            return true;
+        }
+    }
     scanDirectory(cfg);
+    emit watchStatusChanged();
+    return true;
 }
 
-void WatchFolderService::updateFolder(const WatchFolderConfig &config) {
-    if (!m_folders.contains(config.id))
-        return;
-    clearPending(config.id);
-    const auto oldCfg = m_folders[config.id];
-    m_watcher.removePath(oldCfg.folderPath);
-    m_pathToFolderId.remove(QDir(oldCfg.folderPath).canonicalPath());
-
-    addFolder(config);
+bool WatchFolderService::updateFolder(const WatchFolderConfig &config) {
+    return hasFolder(config.id) && addFolder(config);
 }
 
-void WatchFolderService::removeFolder(const QString &folderId) {
-    if (!m_folders.contains(folderId))
+void WatchFolderService::unwatch(const QString &id) {
+    for (const auto &path : m_pathToFolderId.keys(id)) {
+        if (m_watcher.directories().contains(path))
+            m_watcher.removePath(path);
+        m_pathToFolderId.remove(path);
+    }
+}
+
+void WatchFolderService::removeFolder(const QString &id) {
+    if (!m_folders.remove(id))
         return;
-    clearPending(folderId);
-    const auto cfg = m_folders.take(folderId);
-    m_watcher.removePath(cfg.folderPath);
-    m_pathToFolderId.remove(QDir(cfg.folderPath).canonicalPath());
+    ++m_generation[id];
+    clearPending(id);
+    unwatch(id);
+    m_storageBlocked.remove(id);
+    m_needsBaseline.remove(id);
+    m_processedFiles.remove(id);
+    m_failedFiles.remove(id);
+    m_activity.remove(id);
+    QFile::remove(stateFile(id));
     emit watchStatusChanged();
 }
 
-void WatchFolderService::setFolderEnabled(const QString &folderId, bool enabled) {
-    if (!m_folders.contains(folderId))
+void WatchFolderService::setFolderEnabled(const QString &id, bool enabled) {
+    if (!hasFolder(id) || m_folders[id].isEnabled == enabled)
         return;
-    if (!enabled)
-        clearPending(folderId);
-    m_folders[folderId].isEnabled = enabled;
+    ++m_generation[id];
+    m_folders[id].isEnabled = enabled;
     if (enabled) {
-        m_watcher.addPath(m_folders[folderId].folderPath);
-        scanDirectory(m_folders[folderId]);
+        if (m_storageBlocked.remove(id) && !m_needsBaseline.contains(id) && !saveState(m_folders[id])) {
+            pauseWithError(id, "Cannot save watch history. Check application data permissions.");
+            return;
+        }
+        scanDirectory(m_folders[id]);
     } else {
-        m_watcher.removePath(m_folders[folderId].folderPath);
+        clearPending(id);
+        unwatch(id);
     }
     emit watchStatusChanged();
 }
@@ -104,7 +181,7 @@ bool WatchFolderService::hasFolder(const QString &folderId) const { return m_fol
 
 void WatchFolderService::scanAllNow() {
     for (const auto &cfg : m_folders) {
-        if (cfg.isEnabled) {
+        if (cfg.isEnabled || m_needsBaseline.contains(cfg.id)) {
             scanDirectory(cfg);
         }
     }
@@ -112,6 +189,9 @@ void WatchFolderService::scanAllNow() {
 
 void WatchFolderService::clearHistory() {
     m_processedFiles.clear();
+    for (const auto &cfg : m_folders)
+        if (!m_needsBaseline.contains(cfg.id) && !saveState(cfg))
+            pauseWithError(cfg.id, "Cannot clear saved watch history.");
     m_pendingCandidates.clear();
     m_failedFiles.clear();
 }
@@ -129,7 +209,6 @@ void WatchFolderService::clearPending(const QString &id) {
         if (m_jobFolders.value(jobId) == id && job && job->state() == JobState::Queued)
             m_orchestrator->cancelJob(jobId);
     }
-    rebuildWatches();
 }
 
 int WatchFolderService::pendingCount(const QString &id) const {
@@ -144,100 +223,166 @@ void WatchFolderService::retryFailures() {
     scanAllNow();
 }
 
-void WatchFolderService::rebuildWatches() {
-    const auto paths = m_watcher.directories();
-    if (!paths.isEmpty())
-        m_watcher.removePaths(paths);
-    m_pathToFolderId.clear();
-    for (const auto &cfg : m_folders) {
-        if (!cfg.isEnabled)
-            continue;
-        QStringList dirs{cfg.folderPath};
-        if (cfg.isRecursive) {
-            QDirIterator it(cfg.folderPath, QDir::Dirs | QDir::NoDotAndDotDot | QDir::NoSymLinks,
-                            QDirIterator::Subdirectories);
-            while (it.hasNext())
-                dirs << it.next();
+void WatchFolderService::onDirectoryChanged(const QString &path) {
+    const auto id = m_pathToFolderId.value(path);
+    if (hasFolder(id))
+        scanDirectory(m_folders[id], path);
+}
+
+struct DirectoryScan {
+    QSet<QString> visited;
+    QHash<QString, QJsonArray> files;
+    QString error;
+};
+
+static DirectoryScan collectDirectory(const WatchFolderConfig &cfg, const QString &directory) {
+    namespace fs = std::filesystem;
+    const QDir root(cfg.folderPath);
+    const QString output = destinationRoot(cfg);
+    const QString processed = root.filePath("processed");
+    QStringList todo{directory};
+    DirectoryScan result;
+    if (containsPath(output, directory)) {
+        result.error =
+            "The output directory contains the watch folder. Choose a separate destination or a subfolder.";
+        return result;
+    }
+    while (!todo.isEmpty() && result.error.isEmpty()) {
+        const QString path = todo.takeLast();
+        if (QFileInfo(path).canonicalFilePath() != path) {
+            result.error = "Cannot scan " + path + ": directory is missing or has been replaced.";
+            break;
         }
-        for (const auto &dir : dirs) {
-            m_watcher.addPath(dir);
-            m_pathToFolderId.insert(QDir(dir).canonicalPath(), cfg.id);
+        std::error_code ec;
+        fs::directory_iterator it(QDir(path).filesystemPath(), ec), end;
+        for (; !ec && it != end; it.increment(ec)) {
+            const QFileInfo fi(it->path());
+            if (fi.isSymLink() || fi.isHidden())
+                continue;
+            const QString abs = fi.absoluteFilePath();
+            if (abs == output || abs == processed)
+                continue;
+            if (cfg.isRecursive && fi.isDir())
+                todo.append(abs);
+            if (fi.isFile() && fi.isReadable() && !abs.endsWith(".part") && !abs.endsWith(".tmp") &&
+                !abs.endsWith(".crdownload"))
+                result.files.insert(root.relativeFilePath(abs),
+                                    {fi.size(), fi.lastModified().toMSecsSinceEpoch()});
+        }
+        if (ec)
+            result.error = "Cannot scan " + path + ": " + QString::fromStdString(ec.message());
+        else
+            result.visited.insert(path);
+    }
+    return result;
+}
+
+void WatchFolderService::applyScan(const WatchFolderConfig &cfg, const QString &directory,
+                                   const DirectoryScan &scan, bool baseline) {
+    const QDir root(cfg.folderPath);
+    const auto &visited = scan.visited;
+    const auto &files = scan.files;
+    auto &known = m_processedFiles[cfg.id];
+    auto &failed = m_failedFiles[cfg.id];
+    for (auto it = failed.begin(); it != failed.end();) {
+        if (visited.contains(QFileInfo(root.filePath(it.key())).absolutePath()) && !files.contains(it.key()))
+            it = failed.erase(it);
+        else
+            ++it;
+    }
+    bool changed = baseline;
+    for (auto it = known.begin(); it != known.end();) {
+        if (visited.contains(QFileInfo(root.filePath(it.key())).absolutePath()) &&
+            !files.contains(it.key()) && !QFileInfo::exists(root.filePath(it.key()))) {
+            it = known.erase(it);
+            changed = true;
+        } else
+            ++it;
+    }
+    for (auto it = files.begin(); it != files.end(); ++it) {
+        if (baseline) {
+            known.insert(it.key(), it.value());
+            continue;
+        }
+        const QString path = root.filePath(it.key());
+        const auto size = it.value()[0].toInteger();
+        const auto modified = it.value()[1].toInteger();
+        if (known.value(it.key()) == it.value() || m_activeFiles.contains(path) ||
+            m_pendingCandidates.contains(path) || failed.value(it.key()) == it.value())
+            continue;
+        const auto *fmt = FormatRegistry::instance().findByFilePath(path);
+        if (!fmt || !(FormatRegistry::instance().isConversionSupported(fmt->id, cfg.targetFormatId) ||
+                      (fmt->id == cfg.targetFormatId && !cfg.presetId.isEmpty())))
+            continue;
+        m_pendingCandidates.insert(path, {path, cfg.id, size, modified, 0, 0});
+        emit fileDetected(path, cfg.id);
+    }
+    if (changed && !saveState(cfg)) {
+        pauseWithError(cfg.id, "Cannot save watch history. Check application data permissions.");
+    } else {
+        m_needsBaseline.remove(cfg.id);
+        if (baseline)
+            m_activity[cfg.id] = QString("Recorded %1 existing files").arg(known.size());
+        if (cfg.isEnabled) {
+            const auto current = m_watcher.directories();
+            const QSet<QString> watched(current.begin(), current.end());
+            for (const auto &path : visited) {
+                if (!watched.contains(path))
+                    m_watcher.addPath(path);
+                m_pathToFolderId[path] = cfg.id;
+            }
+            for (const auto &path : m_pathToFolderId.keys(cfg.id)) {
+                if ((path == directory || path.startsWith(directory + '/')) && !visited.contains(path)) {
+                    if (watched.contains(path))
+                        m_watcher.removePath(path);
+                    m_pathToFolderId.remove(path);
+                }
+            }
         }
     }
 }
 
-void WatchFolderService::onDirectoryChanged(const QString &) { scanAllNow(); }
-
-void WatchFolderService::scanDirectory(const WatchFolderConfig &cfg) {
-    if (!cfg.isEnabled || !QDir(cfg.folderPath).exists())
+void WatchFolderService::scanDirectory(const WatchFolderConfig &cfg, QString directory) {
+    const bool baseline = m_needsBaseline.contains(cfg.id);
+    if (m_storageBlocked.contains(cfg.id) || (!cfg.isEnabled && !baseline))
         return;
-
-    QDir dir(cfg.folderPath);
-    QDir::Filters filters = QDir::Files | QDir::NoSymLinks | QDir::Readable;
-    QFileInfoList entries;
-    if (cfg.isRecursive) {
-        QDirIterator it(cfg.folderPath, filters, QDirIterator::Subdirectories);
-        while (it.hasNext()) {
-            it.next();
-            entries.append(it.fileInfo());
-        }
-    } else {
-        entries = dir.entryInfoList(filters, QDir::Time);
+    if (directory.isEmpty() || baseline)
+        directory = cfg.folderPath;
+    if (m_scanning.contains(cfg.id)) {
+        m_rescan[cfg.id].insert(directory);
+        return;
     }
-
-    const QString outputRoot =
-        QDir(cfg.destinationFolder.isEmpty() ? QDir(cfg.folderPath).filePath("converted")
-                                             : cfg.destinationFolder)
-            .absolutePath();
-    const QString processedRoot = QDir(cfg.folderPath).absoluteFilePath("processed");
-    for (const auto &fi : entries) {
-        const QString absPath = fi.absoluteFilePath();
-        if (absPath.startsWith(outputRoot + '/') || absPath.startsWith(processedRoot + '/'))
-            continue;
-        if (m_activeFiles.contains(absPath))
-            continue;
-        const qint64 mtime = fi.lastModified().toMSecsSinceEpoch();
-        if (m_failedFiles.contains(absPath) && m_failedFiles.value(absPath) == mtime)
-            continue;
-        auto procIt = m_processedFiles.find(absPath);
-        if (procIt != m_processedFiles.end() && procIt.value() == mtime) {
-            continue;
-        }
-
-        // Ignore temporary partial downloads
-        const QString name = fi.fileName();
-        if (name.startsWith('.') || name.endsWith(".crdownload") || name.endsWith(".part") ||
-            name.endsWith(".tmp")) {
-            continue;
-        }
-
-        // Check format compatibility
-        const auto *inFmt = FormatRegistry::instance().findByFilePath(absPath);
-        if (!inFmt || !inFmt->canInput)
-            continue;
-
-        if (!FormatRegistry::instance().isConversionSupported(inFmt->id, cfg.targetFormatId)) {
-            continue;
-        }
-
-        // Queue as pending debounce candidate
-        if (!m_pendingCandidates.contains(absPath)) {
-            PendingCandidate cand;
-            cand.filePath = absPath;
-            cand.folderId = cfg.id;
-            cand.lastSize = fi.size();
-            cand.lastModified = mtime;
-            cand.stableCount = 0;
-            cand.zeroSizeCount = 0;
-            m_pendingCandidates.insert(absPath, cand);
-            emit fileDetected(absPath, cfg.id);
-        }
-    }
+    m_scanning.insert(cfg.id);
+    const auto generation = m_generation.value(cfg.id);
+    m_scanPool.start([this, cfg, directory, generation, baseline]() {
+        const auto scan = collectDirectory(cfg, directory);
+        QMetaObject::invokeMethod(
+            this,
+            [this, cfg, generation, baseline, directory, scan]() {
+                m_scanning.remove(cfg.id);
+                if (generation == m_generation.value(cfg.id) && hasFolder(cfg.id)) {
+                    if (scan.error.isEmpty())
+                        applyScan(cfg, directory, scan, baseline);
+                    else
+                        m_activity[cfg.id] = scan.error;
+                    emit watchStatusChanged();
+                }
+                auto pending = m_rescan.take(cfg.id);
+                if (hasFolder(cfg.id) && !pending.isEmpty()) {
+                    const auto current = m_folders.value(cfg.id);
+                    if (generation != m_generation.value(cfg.id) || pending.contains(current.folderPath))
+                        scanDirectory(current);
+                    else
+                        for (const auto &path : pending)
+                            scanDirectory(current, path);
+                }
+            },
+            Qt::QueuedConnection);
+    });
 }
 
 void WatchFolderService::onPollTimerTimeout() {
     if (++m_ticks % 5 == 0) {
-        rebuildWatches();
         scanAllNow();
     }
     if (m_pendingCandidates.isEmpty())
@@ -293,31 +438,6 @@ void WatchFolderService::onPollTimerTimeout() {
 
     for (const auto &path : toProcess) {
         PendingCandidate cand = m_pendingCandidates.take(path);
-        const qint64 mtime = QFileInfo(path).lastModified().toMSecsSinceEpoch();
-        Q_UNUSED(mtime);
-        // Bound memory: prune entries that no longer exist on disk (deleted/moved)
-        if (m_processedFiles.size() > 10000) {
-            for (auto it = m_processedFiles.begin(); it != m_processedFiles.end();) {
-                if (!QFile::exists(it.key())) {
-                    it = m_processedFiles.erase(it);
-                } else {
-                    ++it;
-                }
-            }
-            // If still exceeding 10,000, prune oldest entries by mtime
-            if (m_processedFiles.size() > 10000) {
-                QList<QPair<qint64, QString>> entries;
-                entries.reserve(m_processedFiles.size());
-                for (auto it = m_processedFiles.constBegin(); it != m_processedFiles.constEnd(); ++it) {
-                    entries.append({it.value(), it.key()});
-                }
-                std::sort(entries.begin(), entries.end());
-                int removeCount = m_processedFiles.size() - 8000;
-                for (int i = 0; i < removeCount; ++i) {
-                    m_processedFiles.remove(entries[i].second);
-                }
-            }
-        }
         processStableCandidate(cand);
     }
 }
@@ -329,10 +449,15 @@ void WatchFolderService::processStableCandidate(const PendingCandidate &candidat
         return;
 
     const auto cfg = m_folders[candidate.folderId];
-    if (!cfg.isEnabled || m_activeFiles.contains(candidate.filePath))
+    const QString relativePath = QDir(cfg.folderPath).relativeFilePath(candidate.filePath);
+    const QJsonArray fingerprint{candidate.lastSize, candidate.lastModified};
+    if (!cfg.isEnabled || m_needsBaseline.contains(cfg.id) || m_storageBlocked.contains(cfg.id) ||
+        m_processedFiles.value(cfg.id).value(relativePath) == fingerprint ||
+        m_activeFiles.contains(candidate.filePath))
         return;
     const QFileInfo source(candidate.filePath);
-    if (!source.isFile() || source.size() != candidate.lastSize ||
+    if (!source.isFile() || source.canonicalFilePath() != candidate.filePath ||
+        source.size() != candidate.lastSize ||
         source.lastModified().toMSecsSinceEpoch() != candidate.lastModified)
         return;
     const auto *inFmt = FormatRegistry::instance().findByFilePath(candidate.filePath);
@@ -349,13 +474,15 @@ void WatchFolderService::processStableCandidate(const PendingCandidate &candidat
     QVariantMap options;
     if (!cfg.presetId.isEmpty()) {
         const auto *preset = PresetRegistry::instance().findById(cfg.presetId);
-        if (preset)
+        if (preset) {
             options = preset->options;
+            options.insert("presetTarget", preset->targetFormatId);
+        }
     }
     auto result = JobFactory::create(candidate.filePath, cfg.targetFormatId, options,
                                      app::DestinationMode::CustomFolder, destDir);
     if (!result.job) {
-        m_failedFiles.insert(candidate.filePath, candidate.lastModified);
+        m_failedFiles[cfg.id].insert(relativePath, fingerprint);
         m_activity[cfg.id] = result.error;
         emit watchStatusChanged();
         return;
@@ -369,18 +496,30 @@ void WatchFolderService::processStableCandidate(const PendingCandidate &candidat
     auto completionConnection = std::make_shared<QMetaObject::Connection>();
     *completionConnection = connect(
         m_orchestrator, &ConversionOrchestrator::jobFinished, this,
-        [this, candidate, cfg, jobId, completionConnection](const QString &id, JobState state) {
+        [this, candidate, cfg, jobId, completionConnection, relativePath, fingerprint](const QString &id,
+                                                                                       JobState state) {
             if (id != jobId)
                 return;
             disconnect(*completionConnection);
             m_activeFiles.remove(candidate.filePath);
             m_jobFolders.remove(id);
             const QFileInfo source(candidate.filePath);
-            const bool unchanged = source.exists() && source.size() == candidate.lastSize &&
-                                   source.lastModified().toMSecsSinceEpoch() == candidate.lastModified;
+            auto sourceUnchanged = [&]() {
+                const QFileInfo current(candidate.filePath);
+                return current.isFile() && current.canonicalFilePath() == candidate.filePath &&
+                       current.size() == candidate.lastSize &&
+                       current.lastModified().toMSecsSinceEpoch() == candidate.lastModified;
+            };
             if (state == JobState::Completed) {
-                if (unchanged)
-                    m_processedFiles.insert(candidate.filePath, candidate.lastModified);
+                if (sourceUnchanged() && hasFolder(cfg.id) &&
+                    m_folders.value(cfg.id).folderPath == cfg.folderPath) {
+                    m_processedFiles[cfg.id].insert(relativePath, fingerprint);
+                    if (!saveState(cfg)) {
+                        pauseWithError(cfg.id, "Cannot save conversion history; original retained.");
+                        return;
+                    }
+                }
+                const bool unchanged = sourceUnchanged();
                 QString error;
                 if (!unchanged && cfg.postAction != WatchPostAction::KeepOriginal)
                     error = "Original changed; post-action skipped";
@@ -399,13 +538,13 @@ void WatchFolderService::processStableCandidate(const PendingCandidate &candidat
                                          ? "Succeeded at " + QDateTime::currentDateTime().toString("HH:mm:ss")
                                          : error;
             } else {
-                m_failedFiles.insert(candidate.filePath, candidate.lastModified);
+                m_failedFiles[cfg.id].insert(relativePath, fingerprint);
                 m_activity[cfg.id] = "Failed/cancelled: " + source.fileName() + " — use Retry failures";
             }
             emit watchStatusChanged();
         });
 
-    m_orchestrator->addJob(job);
+    m_orchestrator->addJob(job, true);
     emit jobDispatched(jobId, candidate.filePath);
 }
 

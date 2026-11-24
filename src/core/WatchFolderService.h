@@ -6,6 +6,8 @@
 #include <QMap>
 #include <QHash>
 #include <QSet>
+#include <QJsonObject>
+#include <QThreadPool>
 #include <memory>
 #include "WatchFolderConfig.h"
 #include "ConversionJob.h"
@@ -13,6 +15,7 @@
 namespace uc::core {
 
 class ConversionOrchestrator;
+struct DirectoryScan;
 
 class WatchFolderService : public QObject {
     Q_OBJECT
@@ -21,8 +24,8 @@ class WatchFolderService : public QObject {
     explicit WatchFolderService(ConversionOrchestrator *orchestrator, QObject *parent = nullptr);
     ~WatchFolderService() override;
 
-    void addFolder(const WatchFolderConfig &config);
-    void updateFolder(const WatchFolderConfig &config);
+    bool addFolder(const WatchFolderConfig &config, bool restored = false);
+    bool updateFolder(const WatchFolderConfig &config);
     void removeFolder(const QString &folderId);
     void setFolderEnabled(const QString &folderId, bool enabled);
 
@@ -56,14 +59,18 @@ class WatchFolderService : public QObject {
         int zeroSizeCount{0};
     };
 
-    void scanDirectory(const WatchFolderConfig &cfg);
+    void scanDirectory(const WatchFolderConfig &cfg, QString directory = {});
+    void applyScan(const WatchFolderConfig &cfg, const QString &directory, const DirectoryScan &scan,
+                   bool baseline);
+    bool saveState(const WatchFolderConfig &cfg);
+    void pauseWithError(const QString &id, const QString &message);
     void processStableCandidate(const PendingCandidate &candidate);
 
     void clearPending(const QString &id);
-    void rebuildWatches();
+    void unwatch(const QString &id);
     QHash<QString, QString> m_activeFiles;
     QHash<QString, QString> m_jobFolders;
-    QHash<QString, qint64> m_failedFiles;
+    QHash<QString, QHash<QString, QJsonArray>> m_failedFiles;
     QHash<QString, QString> m_activity;
     QString m_lastError;
     int m_ticks{0};
@@ -74,8 +81,13 @@ class WatchFolderService : public QObject {
     QMap<QString, WatchFolderConfig> m_folders;          // keyed by config id
     QMap<QString, QString> m_pathToFolderId;             // watched directory path -> folder id
     QMap<QString, PendingCandidate> m_pendingCandidates; // filePath -> PendingCandidate
-    QHash<QString, qint64>
-        m_processedFiles; // filePath -> mtime, avoids duplicate processing under KeepOriginal
+    QHash<QString, QJsonObject> m_processedFiles;
+    QSet<QString> m_needsBaseline;
+    QSet<QString> m_storageBlocked;
+    QSet<QString> m_scanning;
+    QHash<QString, QSet<QString>> m_rescan;
+    QHash<QString, quint64> m_generation;
+    QThreadPool m_scanPool;
 };
 
 } // namespace uc::core

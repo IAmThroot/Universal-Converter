@@ -47,14 +47,6 @@ class ToolchainManager : public QObject {
         QMutexLocker locker(&m_mutex);
         return m_rsvgConvert;
     }
-    ToolInfo avifenc() const {
-        QMutexLocker locker(&m_mutex);
-        return m_avifenc;
-    }
-    ToolInfo cwebp() const {
-        QMutexLocker locker(&m_mutex);
-        return m_cwebp;
-    }
     ToolInfo oxipng() const {
         QMutexLocker locker(&m_mutex);
         return m_oxipng;
@@ -79,8 +71,6 @@ class ToolchainManager : public QObject {
     ToolInfo m_magick;
     ToolInfo m_pandoc;
     ToolInfo m_rsvgConvert;
-    ToolInfo m_avifenc;
-    ToolInfo m_cwebp;
     ToolInfo m_oxipng;
     ToolInfo m_pngquant;
     int m_pendingScans{0};

@@ -1,4 +1,5 @@
 #include "Application.h"
+#include <QTimer>
 #include "ToolchainManager.h"
 #include "../ui/AppIcon.h"
 #include "../ui/MainWindow.h"
@@ -31,6 +32,9 @@ bool Application::init() {
     // 3. Create and display main window
     m_mainWindow = std::make_unique<ui::MainWindow>();
     m_mainWindow->show();
+    const auto paths = arguments().mid(1);
+    if (!paths.isEmpty())
+        QTimer::singleShot(0, m_mainWindow.get(), [this, paths]() { m_mainWindow->onFilesDropped(paths); });
 
     return true;
 }

@@ -26,8 +26,9 @@ class MainWindow : public QMainWindow {
 
   protected:
     void closeEvent(QCloseEvent *event) override;
-  private slots:
+  public slots:
     void onFilesDropped(const QStringList &filePaths);
+  private slots:
     void onBrowseFilesClicked();
     void onOpenSettingsClicked();
     void onOpenHistoryClicked();

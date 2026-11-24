@@ -1,6 +1,7 @@
 #include "BatchSetupDialog.h"
 #include "FormatSelectorDialog.h"
 #include "ImagePreviewDialog.h"
+#include "../app/ToolchainManager.h"
 #include "../core/EngineCapabilityResolver.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -38,9 +39,9 @@ BatchSetupDialog::BatchSetupDialog(const QStringList &paths, QWidget *parent) : 
     auto *actions = new QHBoxLayout;
     auto *format = new QPushButton("Choose Format / Preset", this);
     auto *remove = new QPushButton("Remove Selected", this);
-    auto *preview = new QPushButton("Image Preview", this);
+    m_preview = new QPushButton("Image Preview", this);
     actions->addWidget(format);
-    actions->addWidget(preview);
+    actions->addWidget(m_preview);
     actions->addWidget(remove);
     actions->addStretch();
     layout->addLayout(actions);
@@ -79,7 +80,9 @@ BatchSetupDialog::BatchSetupDialog(const QStringList &paths, QWidget *parent) : 
         }
         refresh();
     });
-    connect(preview, &QPushButton::clicked, this, [this, selected]() {
+    connect(m_table->selectionModel(), &QItemSelectionModel::selectionChanged, this,
+            &BatchSetupDialog::updatePreviewButton);
+    connect(m_preview, &QPushButton::clicked, this, [this, selected]() {
         const auto rows = selected();
         if (rows.size() != 1)
             return;
@@ -87,9 +90,12 @@ BatchSetupDialog::BatchSetupDialog(const QStringList &paths, QWidget *parent) : 
         const auto *fmt = core::FormatRegistry::instance().findByFilePath(entry.input);
         if (!fmt || fmt->category != core::MediaCategory::Image || entry.output.isEmpty())
             return;
-        ImagePreviewDialog dialog(entry.input, entry.output, this);
-        if (dialog.exec() == QDialog::Accepted)
+        ImagePreviewDialog dialog(entry.input, entry.output, this,
+                                  entry.options.value("quality", 85).toInt());
+        if (dialog.exec() == QDialog::Accepted) {
             entry.options["quality"] = dialog.quality();
+            refresh();
+        }
     });
     auto *dest = new QHBoxLayout;
     m_mode = new QComboBox(this);
@@ -134,6 +140,20 @@ app::DestinationMode BatchSetupDialog::destinationMode() const {
     return app::DestinationMode(m_mode->currentData().toInt());
 }
 QString BatchSetupDialog::destination() const { return m_destination->text().trimmed(); }
+void BatchSetupDialog::updatePreviewButton() {
+    const auto rows = m_table->selectionModel()->selectedRows();
+    bool enabled = false;
+    if (rows.size() == 1 && rows.first().row() < m_entries.size()) {
+        const auto &entry = m_entries[rows.first().row()];
+        const auto *fmt = core::FormatRegistry::instance().findByFilePath(entry.input);
+        const auto route = core::EngineCapabilityResolver::instance().resolveRoute(
+            fmt ? fmt->id : QString(), entry.output, entry.options);
+        enabled = fmt && fmt->category == core::MediaCategory::Image && route.available &&
+                  route.engine == "ImageMagick" && app::ToolchainManager::instance().magick().isAvailable;
+    }
+    m_preview->setEnabled(enabled);
+}
+
 void BatchSetupDialog::refresh() {
     bool ready = !m_entries.isEmpty();
     const bool custom = destinationMode() == app::DestinationMode::CustomFolder;
@@ -184,5 +204,6 @@ void BatchSetupDialog::refresh() {
     m_convert->setText(
         QString("Convert %1 %2").arg(m_entries.size()).arg(m_entries.size() == 1 ? "File" : "Files"));
     m_convert->setEnabled(ready);
+    updatePreviewButton();
 }
 } // namespace uc::ui

@@ -1,4 +1,6 @@
 #include <QTest>
+#include <QTextStream>
+#include "../src/core/JobFactory.h"
 #include <QGuiApplication>
 #include <QScopeGuard>
 #include <QStandardPaths>
@@ -36,11 +38,55 @@
 
 using namespace uc::core;
 
+static QString formatTable() {
+    QStringList lines{"| Category | Input and output | Input only | Output only |",
+                      "| --- | --- | --- | --- |"};
+    const QStringList categories{"Video", "Audio", "Images", "Documents", "Subtitles"};
+    for (int i = 0; i < categories.size(); ++i) {
+        QStringList both, readers, writers;
+        for (const auto &format : FormatRegistry::instance().formatsForCategory(MediaCategory(i))) {
+            QString name = "`" + format.defaultExtension + "`";
+            auto aliases = format.extensions;
+            aliases.removeAll(format.defaultExtension);
+            if (!aliases.isEmpty())
+                name += " (" + aliases.join(", ") + ")";
+            if (format.canInput && format.canOutput)
+                both << name;
+            else if (format.canInput)
+                readers << name;
+            else if (format.canOutput)
+                writers << name;
+        }
+        auto cell = [](const QStringList &values) {
+            return values.isEmpty() ? QString("—") : values.join(", ");
+        };
+        lines
+            << QString("| %1 | %2 | %3 | %4 |").arg(categories[i], cell(both), cell(readers), cell(writers));
+    }
+    return lines.join('\n');
+}
+
 class CoreTests : public QObject {
     Q_OBJECT
 
   private slots:
     void initTestCase();
+    void generatedReadmeMatchesRegistry() {
+        QFile file(QFINDTESTDATA("../README.md"));
+        QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString doc = QString::fromUtf8(file.readAll());
+        const auto begin = QStringLiteral("<!-- formats:begin -->\n");
+        const auto end = QStringLiteral("\n<!-- formats:end -->");
+        QVERIFY(doc.contains(begin) && doc.contains(end));
+        QCOMPARE(doc.section(begin, 1).section(end, 0, 0), formatTable());
+    }
+    void watchUpgradeAndRestart();
+    void outputReservationOwnership();
+    void automatedQueueRetention();
+    void mediaRoutesAndFrames();
+    void vectorPdfWithoutDocumentTools();
+    void interruptedWatchBaseline();
+    void failedBaselinePausesWatch();
     void testCancellationDuringPreparation();
     void testCancellationDuringValidation();
     void testSvgCancellationAndShutdown();
@@ -857,7 +903,7 @@ void CoreTests::testImageMagickArgBuilderPngToJpeg() {
 
     auto res = ImageMagickArgBuilder::buildArguments("/in/image.png", "/out/image.jpeg", opts);
     QVERIFY(res.isValid);
-    QVERIFY(res.arguments.contains("/in/image.png"));
+    QVERIFY(res.arguments.contains("/in/image.png[0]"));
     QVERIFY(res.arguments.contains("-quality"));
     QVERIFY(res.arguments.contains("90"));
     QVERIFY(res.arguments.contains("/out/image.jpeg"));
@@ -2017,7 +2063,7 @@ void CoreTests::testWatchFolderServiceDetectionAndDebounce() {
 
     // Manually trigger scan or let poll pick it up
     service.scanAllNow();
-    QCOMPARE(detectedSpy.count(), 1);
+    QTRY_COMPARE(detectedSpy.count(), 1);
 
     // Wait for debouncer (poll timer is 1000ms and stable count >= 1)
     QVERIFY(dispatchedSpy.wait(3500));
@@ -2499,9 +2545,267 @@ void CoreTests::testWatchOriginalProtection() {
     QVERIFY(watch.activity(cfg.id).contains("changed"));
 }
 
+void CoreTests::watchUpgradeAndRestart() {
+    QTemporaryDir root;
+    ConversionOrchestrator orch;
+    WatchFolderConfig cfg;
+    cfg.id = "large-upgrade";
+    cfg.folderPath = root.path();
+    cfg.targetFormatId = "html";
+    cfg.isEnabled = false;
+    cfg.postAction = WatchPostAction::DeleteOriginal;
+    QVERIFY(root.isValid());
+    for (int i = 0; i < 10002; ++i) {
+        QFile source(root.filePath(QString::number(i) + ".md"));
+        QVERIFY(source.open(QIODevice::WriteOnly));
+        source.write("# Source");
+    }
+    {
+        WatchFolderService service(&orch);
+        QVERIFY(!service.addFolder({}));
+        QSignalSpy status(&service, &WatchFolderService::watchStatusChanged);
+        QVERIFY(service.addFolder(cfg, true));
+        auto invalid = cfg;
+        invalid.folderPath = "   ";
+        QVERIFY(!service.updateFolder(invalid));
+        QCOMPARE(service.folderConfig(cfg.id).folderPath, root.path());
+        QTRY_VERIFY_WITH_TIMEOUT(status.size() >= 2, 15000);
+        QCOMPARE(service.pendingCount(cfg.id), 0);
+        QVERIFY(QFileInfo::exists(root.filePath("0.md")));
+    }
+    const QString offline = root.path() + "-offline";
+    QVERIFY(QDir().rename(root.path(), offline));
+    {
+        WatchFolderService service(&orch);
+        cfg.isEnabled = true;
+        QVERIFY(service.addFolder(cfg, true));
+        QTRY_VERIFY(service.activity(cfg.id).contains("Cannot scan"));
+        QCOMPARE(service.pendingCount(cfg.id), 0);
+    }
+    QVERIFY(QDir().rename(offline, root.path()));
+    {
+        WatchFolderService service(&orch);
+        QSignalSpy status(&service, &WatchFolderService::watchStatusChanged);
+        QVERIFY(service.addFolder(cfg, true));
+        QTRY_VERIFY_WITH_TIMEOUT(status.size() >= 2, 15000);
+        QCOMPARE(service.pendingCount(cfg.id), 0);
+        QFile changed(root.filePath("0.md"));
+        QVERIFY(changed.open(QIODevice::Append));
+        changed.write(" updated");
+        changed.close();
+        QSignalSpy detected(&service, &WatchFolderService::fileDetected);
+        service.scanAllNow();
+        QTRY_COMPARE_WITH_TIMEOUT(detected.size(), 1, 15000);
+        QCOMPARE(detected.first().first().toString(), changed.fileName());
+        service.setFolderEnabled(cfg.id, false);
+        QCOMPARE(orch.totalJobCount(), 0);
+    }
+    QCOMPARE(WatchFolderConfig::fromJson({}).postAction, WatchPostAction::KeepOriginal);
+}
+
+void CoreTests::outputReservationOwnership() {
+    QTemporaryDir root;
+    const auto input = root.filePath("input.svg");
+    QFile file(input);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("<svg/>");
+    file.close();
+    const auto dest = root.filePath("custom");
+    auto first = JobFactory::create(input, "png", {}, uc::app::DestinationMode::CustomFolder, dest);
+    QVERIFY(first.job);
+    ConversionOrchestrator orch;
+    orch.addJob(first.job); // No image engine, so completion releases the reservation.
+    QCOMPARE(first.job->state(), JobState::Failed);
+    auto second = JobFactory::retry(input, "png", {}, first.job->finalOutputPath());
+    QVERIFY(second.job);
+    QCOMPARE(second.job->finalOutputPath(), first.job->finalOutputPath());
+    orch.clearCompletedJobs();
+    auto third = JobFactory::retry(input, "png", {}, first.job->finalOutputPath());
+    QVERIFY(third.job);
+    QVERIFY(third.job->finalOutputPath() != second.job->finalOutputPath());
+    QCOMPARE(third.job->destinationDirectory(), dest);
+    const QString abandoned = third.job->finalOutputPath();
+    third.job.reset();
+    QCOMPARE(OutputPathPlanner::resolveUniquePath(abandoned), abandoned);
+}
+
+void CoreTests::automatedQueueRetention() {
+    ConversionOrchestrator orch;
+    auto add = [&](QString id, bool automated) {
+        auto job = std::make_shared<ConversionJob>(id, QStringList{"source.svg"}, "svg", "png", QString(),
+                                                   EngineType::ImageMagick);
+        orch.addJob(job, automated);
+        QCOMPARE(job->state(), JobState::Failed);
+    };
+    add("manual", false);
+    for (int i = 0; i < 202; ++i)
+        add(QString::number(i), true);
+    QCOMPARE(orch.totalJobCount(), 201);
+    QVERIFY(orch.findJob("manual"));
+    QVERIFY(!orch.findJob("1"));
+    QVERIFY(orch.findJob("2"));
+}
+
+void CoreTests::mediaRoutesAndFrames() {
+    using namespace uc::engines;
+    auto &tools = uc::app::ToolchainManager::instance();
+    auto &resolver = EngineCapabilityResolver::instance();
+    QTemporaryDir dir;
+    if (!tools.ffmpeg().isAvailable || !tools.ffprobe().isAvailable || !tools.magick().isAvailable)
+        QSKIP("Requires FFmpeg, FFprobe, and ImageMagick");
+    const QString input = dir.filePath("audio.wav");
+    QVERIFY(ProcessRunner::executeSync(tools.ffmpeg().executablePath,
+                                       {"-f", "lavfi", "-i", "sine=duration=0.25", input})
+                .isSuccess());
+    ConversionOrchestrator orch;
+    orch.setFfmpegEngine(std::make_shared<FfmpegEngine>());
+    orch.setImageMagickEngine(std::make_shared<ImageMagickEngine>());
+    for (const auto &ext : {"aac", "m4b", "webm"}) {
+        auto result = JobFactory::create(input, ext, {}, uc::app::DestinationMode::SameAsSource, {});
+        QVERIFY2(result.job, qPrintable(result.error));
+        orch.addJob(result.job);
+        QTRY_VERIFY_WITH_TIMEOUT(result.job->isTerminal(), 15000);
+        QVERIFY2(result.job->state() == JobState::Completed, qPrintable(result.job->errorMessage()));
+        auto probe = MediaProbe::probeFile(tools.ffprobe().executablePath, result.job->finalOutputPath());
+        QVERIFY(probe.hasAudio());
+        QCOMPARE(probe.hasVideo(), QString(ext) == "webm");
+        const QString container = QString(ext) == "m4b" ? "mov" : ext;
+        QVERIFY(probe.formatName.split(',').contains(container));
+    }
+    const auto video = JobFactory::create(dir.filePath("audio.webm"), "mp4",
+                                          {{"customAudioBitrateKbps", 96}, {"customVideoCodec", "libx264"}},
+                                          uc::app::DestinationMode::SameAsSource, {});
+    QVERIFY2(video.job, qPrintable(video.error));
+    orch.addJob(video.job);
+    QTRY_VERIFY_WITH_TIMEOUT(video.job->isTerminal(), 15000);
+    QCOMPARE(video.job->state(), JobState::Completed);
+    QVERIFY(video.job->executedCommand().contains("-b:a 96k"));
+    const auto encoded = MediaProbe::probeFile(tools.ffprobe().executablePath, video.job->finalOutputPath());
+    QVERIFY(encoded.hasAudio() && encoded.hasVideo());
+    auto preset = PresetRegistry::instance().findById("compress_discord");
+    QVERIFY(preset);
+    auto compression = preset->options;
+    compression.insert("presetTarget", preset->targetFormatId);
+    const auto compressed = JobFactory::create(video.job->finalOutputPath(), "mp4", compression,
+        uc::app::DestinationMode::SameAsSource, {});
+    QVERIFY2(compressed.job, qPrintable(compressed.error));
+    QVERIFY(compressed.job->finalOutputPath() != video.job->finalOutputPath());
+    orch.addJob(compressed.job);
+    QTRY_VERIFY_WITH_TIMEOUT(compressed.job->isTerminal(), 15000);
+    QCOMPARE(compressed.job->state(), JobState::Completed);
+    QVERIFY(QFileInfo::exists(video.job->finalOutputPath()));
+    const QString gif = dir.filePath("frames.gif");
+    QVERIFY(
+        ProcessRunner::executeSync(tools.magick().executablePath, {"-size", "8x8", "xc:red", "xc:blue", gif})
+            .isSuccess());
+    auto image = JobFactory::create(gif, "png", {}, uc::app::DestinationMode::SameAsSource, {});
+    QVERIFY2(image.job, qPrintable(image.error));
+    orch.addJob(image.job);
+    QTRY_VERIFY_WITH_TIMEOUT(image.job->isTerminal(), 10000);
+    QCOMPARE(image.job->state(), JobState::Completed);
+    QCOMPARE(QImage(image.job->finalOutputPath()).pixelColor(0, 0), QColor(Qt::red));
+    QVERIFY(QDir(dir.path()).entryList({".tmp*"}, QDir::Hidden | QDir::Files).isEmpty());
+    QVERIFY(!resolver.resolveRoute("mp4", "mp4").available);
+}
+
+void CoreTests::vectorPdfWithoutDocumentTools() {
+    auto &tools = uc::app::ToolchainManager::instance();
+    QTemporaryDir root;
+    const auto missing = root.filePath("missing-engine");
+    tools.scanAll(missing, missing, missing);
+    auto restore = qScopeGuard([&] { tools.scanAll(); });
+    auto &routes = EngineCapabilityResolver::instance();
+    QVERIFY(!routes.resolveRoute("md", "pdf").available);
+    QVERIFY(!routes.resolveRoute("png", "pdf").available);
+    QVERIFY(!routes.resolveRoute("wav", "aac").available);
+    if (!tools.rsvgConvert().isAvailable) {
+        QVERIFY(!routes.resolveRoute("svg", "pdf").available);
+        return;
+    }
+    QFile source(root.filePath("source.svg"));
+    QVERIFY(source.open(QIODevice::WriteOnly));
+    source.write(
+        R"(<svg xmlns="http://www.w3.org/2000/svg" width="50" height="50"><rect width="50" height="50"/></svg>)");
+    source.close();
+    ConversionOrchestrator queue;
+    queue.setImageMagickEngine(std::make_shared<uc::engines::ImageMagickEngine>());
+    auto result =
+        JobFactory::create(source.fileName(), "pdf", {}, uc::app::DestinationMode::SameAsSource, {});
+    QVERIFY2(result.job, qPrintable(result.error));
+    queue.addJob(result.job);
+    QTRY_COMPARE(result.job->state(), JobState::Completed);
+    QVERIFY(uc::engines::DocumentValidator::validate(result.job->finalOutputPath(), "pdf").isValid);
+}
+
+void CoreTests::interruptedWatchBaseline() {
+    QTemporaryDir root;
+    ConversionOrchestrator queue;
+    WatchFolderConfig cfg;
+    cfg.id = "interrupted-baseline";
+    cfg.folderPath = root.path();
+    cfg.targetFormatId = "html";
+    cfg.postAction = WatchPostAction::DeleteOriginal;
+    QFile source(root.filePath("original.md"));
+    QVERIFY(source.open(QIODevice::WriteOnly));
+    source.write("# Preserve me");
+    source.close();
+    {
+        WatchFolderService service(&queue);
+        QVERIFY(service.addFolder(cfg, true));
+        // Destroy the service before it can commit the worker's queued result.
+    }
+    WatchFolderService restarted(&queue);
+    QSignalSpy status(&restarted, &WatchFolderService::watchStatusChanged);
+    QVERIFY(restarted.addFolder(cfg, true));
+    QTRY_VERIFY(status.count() >= 2);
+    QCOMPARE(restarted.pendingCount(cfg.id), 0);
+    QCOMPARE(queue.totalJobCount(), 0);
+    QVERIFY(source.exists());
+}
+
+void CoreTests::failedBaselinePausesWatch() {
+    QTemporaryDir data;
+    QTemporaryDir root;
+    const auto previous = qApp->property("testDataDirectory");
+    qApp->setProperty("testDataDirectory", data.path());
+    auto restore = qScopeGuard([&] { qApp->setProperty("testDataDirectory", previous); });
+    QFile blocker(data.filePath("watch-state"));
+    QVERIFY(blocker.open(QIODevice::WriteOnly));
+    blocker.close();
+    QFile source(root.filePath("original.md"));
+    QVERIFY(source.open(QIODevice::WriteOnly));
+    source.write("# Existing file");
+    source.close();
+
+    ConversionOrchestrator queue;
+    WatchFolderService service(&queue);
+    WatchFolderConfig cfg;
+    cfg.id = "failed-baseline";
+    cfg.folderPath = root.path();
+    cfg.targetFormatId = "html";
+    cfg.postAction = WatchPostAction::DeleteOriginal;
+    QVERIFY(service.addFolder(cfg, true));
+    QTRY_VERIFY(!service.folderConfig(cfg.id).isEnabled);
+    QVERIFY(service.activity(cfg.id).contains("Cannot save"));
+    QCOMPARE(queue.totalJobCount(), 0);
+    QVERIFY(source.exists());
+
+    QVERIFY(blocker.remove());
+    QSignalSpy changed(&service, &WatchFolderService::watchStatusChanged);
+    service.setFolderEnabled(cfg.id, true);
+    QTRY_VERIFY(changed.count() >= 2);
+    QVERIFY(service.folderConfig(cfg.id).isEnabled);
+    QCOMPARE(service.pendingCount(cfg.id), 0);
+    QVERIFY(source.exists());
+}
+
 // SVG rendering uses Qt's platform font database, including on Windows.
 int main(int argc, char** argv) {
     QGuiApplication app(argc, argv);
+    if (app.arguments().contains("--format-table")) {
+        QTextStream(stdout) << formatTable() << Qt::endl;
+        return 0;
+    }
     CoreTests tests;
     return QTest::qExec(&tests, argc, argv);
 }

@@ -3,6 +3,8 @@
 #include "../engines/ImageMagickCapabilities.h"
 #include "../engines/PandocCapabilities.h"
 #include "ProcessRunner.h"
+#include "SystemInfo.h"
+#include "../app/AppSettings.h"
 #include "../engines/VectorPipeline.h"
 #include "../engines/FfmpegArgBuilder.h"
 
@@ -23,18 +25,36 @@ EngineCapabilityResolver::EngineCapabilityResolver() {
         refresh();
 }
 
+static QSet<QString> listedNames(const QByteArray &listing, bool muxers) {
+    QSet<QString> names;
+    for (const auto &line : listing.split('\n')) {
+        const auto parts = line.simplified().split(' ');
+        if (parts.size() < 2 || parts[1] == "=")
+            continue;
+        const auto flags = parts.first();
+        if (muxers ? !flags.contains('E') : flags.size() != 6 || !QByteArray("VAS").contains(flags[0]))
+            continue;
+        for (const auto &name : parts[1].split(','))
+            names.insert(QString::fromLatin1(name));
+    }
+    return names;
+}
+
 void EngineCapabilityResolver::refresh() {
     m_cache.clear();
     const auto ffmpeg = app::ToolchainManager::instance().ffmpeg();
+    m_hardwareEncoders = SystemInfo::probe().availableHwEncoders;
     m_muxers.clear();
     m_encoders.clear();
     if (ffmpeg.isAvailable) {
-        m_muxers = QString::fromUtf8(
-            ProcessRunner::executeSync(ffmpeg.executablePath, {"-hide_banner", "-muxers"}, 3000)
-                .standardOutput);
-        m_encoders = QString::fromUtf8(
-            ProcessRunner::executeSync(ffmpeg.executablePath, {"-hide_banner", "-encoders"}, 3000)
-                .standardOutput);
+        m_muxers =
+            listedNames(ProcessRunner::executeSync(ffmpeg.executablePath, {"-hide_banner", "-muxers"}, 3000)
+                            .standardOutput,
+                        true);
+        m_encoders =
+            listedNames(ProcessRunner::executeSync(ffmpeg.executablePath, {"-hide_banner", "-encoders"}, 3000)
+                            .standardOutput,
+                        false);
     }
 
     const auto &formats = FormatRegistry::instance().allFormats();
@@ -131,9 +151,30 @@ void EngineCapabilityResolver::refresh() {
     emit capabilitiesChanged();
 }
 
+static bool hasEncodingOptions(MediaCategory category, const QVariantMap &options) {
+    auto hasAny = [&](std::initializer_list<const char *> keys) {
+        for (const auto *key : keys)
+            if (options.contains(key))
+                return true;
+        return false;
+    };
+    if (category == MediaCategory::Image)
+        return hasAny({"width", "height", "quality", "stripMetadata", "autoOrient", "preserveAnimation"});
+    if (category == MediaCategory::Audio || category == MediaCategory::Video) {
+        if (hasAny({"customAudioCodec", "customAudioBitrateKbps", "customAudioSampleRate", "customAudioChannels"}))
+            return true;
+        return category == MediaCategory::Video &&
+               hasAny({"customWidth", "customHeight", "customVideoCodec", "customVideoBitrateKbps", "customFps", "preset", "crf"});
+    }
+    return false;
+}
+
 RouteCapability EngineCapabilityResolver::resolveRoute(const QString &input, const QString &output,
                                                        const QVariantMap &options) const {
-    const auto comp = FormatRegistry::instance().checkCompatibility(input, output);
+    const auto *source = FormatRegistry::instance().findById(input);
+    const bool reencode = source && input == output && options.value("presetTarget").toString() == output &&
+                          hasEncodingOptions(source->category, options);
+    const auto comp = FormatRegistry::instance().checkCompatibility(input, output, reencode);
     RouteCapability result;
     result.engine = comp.responsibleEngine;
     auto block = [&](const QString &why) {
@@ -150,6 +191,16 @@ RouteCapability EngineCapabilityResolver::resolveRoute(const QString &input, con
         result.available = true;
         return result;
     }
+    if (comp.responsibleEngine == "ImageMagick" && output == "pdf") {
+        if (input == "svg" && app::ToolchainManager::instance().rsvgConvert().isAvailable) {
+            result.available = true;
+            return result;
+        }
+        if (!in.isReadableOnHost || !engines::ImageMagickCapabilities::instance().canWriteFormat("PDF"))
+            return block("Image-to-PDF requires a writable ImageMagick PDF format or an SVG PDF renderer");
+        result.available = true;
+        return result;
+    }
     if (comp.responsibleEngine != "FFmpeg" && !in.isReadableOnHost)
         return block("Input decoder or required tool is unavailable");
     if (comp.responsibleEngine != "FFmpeg" && !out.isWritableOnHost)
@@ -162,14 +213,14 @@ RouteCapability EngineCapabilityResolver::resolveRoute(const QString &input, con
             !app::ToolchainManager::instance().ffprobe().isAvailable)
             return block("FFprobe is required to inspect and validate media");
         static const QMap<QString, QString> mux = {
-            {"mkv", "matroska"},     {"mka", "matroska"}, {"m4a", "ipod"},    {"m4v", "ipod"},
-            {"srt", "srt"},          {"ssa", "ass"},      {"mpeg", "mpeg"},   {"mpg", "mpeg"},
-            {"y4m", "yuv4mpegpipe"}, {"dv", "dv"},        {"alac", "ipod"},   {"vtt", "webvtt"},
-            {"jpg", "image2"},       {"ts", "mpegts"},    {"m2ts", "mpegts"}, {"wmv", "asf"},
-            {"wma", "asf"},          {"ogv", "ogg"},      {"opus", "opus"},   {"aiff", "aiff"}};
+            {"aac", "adts"},    {"m4b", "ipod"},   {"mkv", "matroska"},     {"mka", "matroska"},
+            {"m4a", "ipod"},    {"m4v", "ipod"},   {"srt", "srt"},          {"ssa", "ass"},
+            {"mpeg", "mpeg"},   {"mpg", "mpeg"},   {"y4m", "yuv4mpegpipe"}, {"dv", "dv"},
+            {"alac", "ipod"},   {"vtt", "webvtt"}, {"jpg", "image2"},       {"ts", "mpegts"},
+            {"m2ts", "mpegts"}, {"wmv", "asf"},    {"wma", "asf"},          {"ogv", "ogg"},
+            {"opus", "opus"},   {"aiff", "aiff"}};
         const QString container = mux.value(output, output);
-        if (!m_muxers.contains(" " + container + " ") && !m_muxers.contains("," + container) &&
-            !m_muxers.contains(" " + container + ","))
+        if (!m_muxers.contains(container))
             return block("Installed FFmpeg does not report this output container");
         if (engines::FfmpegArgBuilder::isSubtitleContainer(output)) {
             const QString codec = output == "srt"   ? "subrip"
@@ -195,13 +246,10 @@ RouteCapability EngineCapabilityResolver::resolveRoute(const QString &input, con
                 video.frameRate = 30;
                 probe.streams << video;
             }
-            engines::FfmpegConversionOptions settings;
-            settings.targetFormatId = output;
-            settings.hwMode = engines::HardwareEncoderMode::Disabled;
-            settings.customVideoCodec = options.value("customVideoCodec").toString();
-            settings.customAudioCodec = options.value("customAudioCodec").toString();
+            const auto settings = engines::FfmpegConversionOptions::fromJob(
+                output, options, app::AppSettings::instance().hardwareAccelerationEnabled());
             const auto built = engines::FfmpegArgBuilder::buildArguments("input." + input, "output." + output,
-                                                                         probe, settings, {});
+                                                                         probe, settings, m_hardwareEncoders);
             if (!built.isValid)
                 return block(built.errorMessage);
             for (const auto &codec : {built.chosenVideoCodec, built.chosenAudioCodec})

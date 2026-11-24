@@ -1,4 +1,5 @@
 #include "ConversionJob.h"
+#include "OutputPathPlanner.h"
 
 namespace uc::core {
 
@@ -40,6 +41,15 @@ ConversionJob::ConversionJob(const QString &id, const QStringList &inputPaths, c
     : QObject(parent), m_id(id), m_inputPaths(inputPaths), m_inputFormatId(inputFormatId.toLower()),
       m_outputFormatId(outputFormatId.toLower()), m_destinationDirectory(destinationPath), m_engine(engine),
       m_createdAt(QDateTime::currentDateTime()) {}
+
+ConversionJob::~ConversionJob() { releaseReservedOutput(); }
+
+void ConversionJob::adoptReservedOutput(const QString &path) { m_reservedOutput = m_finalOutputPath = path; }
+
+void ConversionJob::releaseReservedOutput() {
+    OutputPathPlanner::releasePath(m_reservedOutput);
+    m_reservedOutput.clear();
+}
 
 bool ConversionJob::isTerminal() const {
     return m_state == JobState::Completed || m_state == JobState::Failed || m_state == JobState::Cancelled;

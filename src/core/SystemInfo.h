@@ -17,6 +17,7 @@ struct SystemCapabilities {
 class SystemInfo {
 public:
     static SystemCapabilities probe();
+    static SystemCapabilities probe(const QString &executablePath);
 };
 
 } // namespace uc::core

@@ -18,18 +18,22 @@ static QMutex s_cacheMutex;
 
 SystemCapabilities SystemInfo::probe() {
     const auto ffmpeg = app::ToolchainManager::instance().ffmpeg();
-    if (!ffmpeg.isAvailable) {
+    return probe(ffmpeg.isAvailable ? ffmpeg.executablePath : QString());
+}
+
+SystemCapabilities SystemInfo::probe(const QString &executablePath) {
+    if (executablePath.isEmpty()) {
         SystemCapabilities caps;
         caps.cpuThreadCount = QThread::idealThreadCount();
         return caps;
     }
 
-    QFileInfo fi(ffmpeg.executablePath);
+    QFileInfo fi(executablePath);
     const QDateTime currentMtime = fi.lastModified();
 
     {
         QMutexLocker locker(&s_cacheMutex);
-        if (s_hasCached && s_cachedPath == ffmpeg.executablePath && s_cachedMtime == currentMtime) {
+        if (s_hasCached && s_cachedPath == executablePath && s_cachedMtime == currentMtime) {
             return s_cachedCaps;
         }
     }
@@ -39,7 +43,7 @@ SystemCapabilities SystemInfo::probe() {
 
     QProcess proc;
     proc.setProcessEnvironment(ProcessRunner::cleanEnvironment());
-    proc.start(ffmpeg.executablePath, QStringList{"-hide_banner", "-encoders"});
+    proc.start(executablePath, QStringList{"-hide_banner", "-encoders"});
     if (proc.waitForFinished(3000)) {
         const QString out = QString::fromUtf8(proc.readAllStandardOutput());
         const QStringList lines = out.split('\n');
@@ -86,7 +90,7 @@ SystemCapabilities SystemInfo::probe() {
 
             QProcess testProc;
             testProc.setProcessEnvironment(ProcessRunner::cleanEnvironment());
-            testProc.start(ffmpeg.executablePath, probeArgs);
+            testProc.start(executablePath, probeArgs);
             const bool done = testProc.waitForFinished(2000);
             if (!done) {
                 testProc.kill();
@@ -108,7 +112,7 @@ SystemCapabilities SystemInfo::probe() {
     {
         QMutexLocker locker(&s_cacheMutex);
         s_cachedCaps = caps;
-        s_cachedPath = ffmpeg.executablePath;
+        s_cachedPath = executablePath;
         s_cachedMtime = currentMtime;
         s_hasCached = true;
     }

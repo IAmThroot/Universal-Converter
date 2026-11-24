@@ -140,13 +140,13 @@ bool ImageMagickEngine::executeJob(std::shared_ptr<core::ConversionJob> job) {
         job->setError("Output path is empty; job was not planned correctly.");
         return false;
     }
-    const QString tempOut = core::OutputPathPlanner::generateTemporaryOutputPath(finalOut);
-    if (tempOut.isEmpty()) {
-        job->setError("Failed to generate temporary output path.");
+    const QFileInfo finalFile(finalOut);
+    auto ctx = std::make_shared<RunningContext>(finalFile.dir().filePath(".tmp_image_XXXXXX"));
+    if (!ctx->directory.isValid()) {
+        job->setError("Cannot create a temporary image directory in the destination folder.");
         return false;
     }
-
-    auto ctx = std::make_shared<RunningContext>();
+    const QString tempOut = ctx->directory.filePath(finalFile.fileName());
     ctx->job = job;
     ctx->runner = std::make_shared<core::ProcessRunner>(this);
     ctx->tempOutputPath = tempOut;

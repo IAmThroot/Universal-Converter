@@ -55,8 +55,9 @@ class EngineCapabilityResolver : public QObject {
     ~EngineCapabilityResolver() = default;
 
     QMap<QString, DynamicFormatCapability> m_cache;
-    QString m_muxers;
-    QString m_encoders;
+    QStringList m_hardwareEncoders;
+    QSet<QString> m_muxers;
+    QSet<QString> m_encoders;
 };
 
 } // namespace uc::core

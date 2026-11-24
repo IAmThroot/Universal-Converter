@@ -17,7 +17,7 @@ struct OptimizationResult {
     qint64 originalSizeBytes{0};
     qint64 optimizedSizeBytes{0};
     double savingsPercent{0.0};
-    QString usedTool; // "oxipng", "pngquant", "avifenc", "cwebp", "ImageMagick", or "none"
+    QString usedTool; // "oxipng", "pngquant", "ImageMagick", or "none"
     QString errorMessage;
 };
 
@@ -27,19 +27,6 @@ public:
     static OptimizationResult optimizeImage(const QString& filePath,
                                             const ImageOptimizerOptions& options = ImageOptimizerOptions());
 
-    /// Encode input raster file to WebP using standalone cwebp or ImageMagick
-    static bool encodeWebP(const QString& inputPath,
-                           const QString& outputPath,
-                           int quality = 85,
-                           bool lossless = false,
-                           QString* errorMessage = nullptr);
-
-    /// Encode input raster file to AVIF using standalone avifenc or ImageMagick
-    static bool encodeAvif(const QString& inputPath,
-                           const QString& outputPath,
-                           int quality = 80,
-                           bool lossless = false,
-                           QString* errorMessage = nullptr);
 };
 
 } // namespace uc::engines

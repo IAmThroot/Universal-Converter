@@ -175,24 +175,27 @@ void WatchFoldersDialog::editFolder(bool add) {
     layout->addRow("Wait", debounce);
     auto *error = new QLabel(&dialog);
     error->setWordWrap(true);
+    auto *summary = new QLabel(&dialog);
+    summary->setWordWrap(true);
+    auto updateSummary = [&]() {
+        const QString path =
+            root->text().trimmed().isEmpty() ? QString() : QFileInfo(root->text()).canonicalFilePath();
+        summary->setText(path.isEmpty() ? QString() : path + " — " + post->currentText());
+    };
+    connect(root, &QLineEdit::textChanged, &dialog, updateSummary);
+    connect(post, &QComboBox::currentIndexChanged, &dialog, updateSummary);
+    updateSummary();
+    layout->addRow(summary);
     layout->addRow(error);
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
     layout->addRow(buttons);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     connect(buttons, &QDialogButtonBox::accepted, &dialog, [&]() {
-        if (!QDir(root->text()).exists()) {
+        if (root->text().trimmed().isEmpty() || !QFileInfo(root->text()).isDir()) {
             error->setText("Choose an existing folder.");
             return;
         }
         const QString canonical = QDir(root->text()).canonicalPath();
-        for (const auto &other : m_service->configuredFolders()) {
-            const QString path = QDir(other.folderPath).canonicalPath();
-            if (other.id != cfg.id &&
-                (path == canonical || path.startsWith(canonical + '/') || canonical.startsWith(path + '/'))) {
-                error->setText("Watch folders must not overlap.");
-                return;
-            }
-        }
         const auto *profile = core::PresetRegistry::instance().findById(preset->currentData().toString());
         if (profile && profile->targetFormatId != target->currentData().toString()) {
             error->setText("The preset target must match the output format.");
@@ -205,14 +208,14 @@ void WatchFoldersDialog::editFolder(bool add) {
         cfg.postAction = core::WatchPostAction(post->currentIndex());
         cfg.isRecursive = recursive->isChecked();
         cfg.debounceSeconds = debounce->value();
+        if (!(add ? m_service->addFolder(cfg) : m_service->updateFolder(cfg))) {
+            error->setText(m_service->lastError());
+            return;
+        }
         dialog.accept();
     });
     if (dialog.exec() != QDialog::Accepted)
         return;
-    if (add)
-        m_service->addFolder(cfg);
-    else
-        m_service->updateFolder(cfg);
     save();
     refresh();
 }

@@ -22,6 +22,8 @@ class BatchSetupDialog : public QDialog {
 
   private:
     void refresh();
+    void updatePreviewButton();
+    QPushButton *m_preview;
     QTableWidget *m_table;
     QComboBox *m_mode;
     QLineEdit *m_destination;

@@ -51,6 +51,7 @@ private:
     QPushButton* m_editPresetBtn{nullptr};
     QPushButton* m_deletePresetBtn{nullptr};
     QLabel* m_presetDescLabel{nullptr};
+    QPushButton *m_ok{nullptr};
     QLineEdit* m_searchEdit{nullptr};
     QListWidget* m_listWidget{nullptr};
     QLabel* m_sourceInfoLabel{nullptr};

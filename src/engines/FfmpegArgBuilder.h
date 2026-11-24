@@ -2,6 +2,7 @@
 
 #include <QString>
 #include <QStringList>
+#include <QVariantMap>
 #include "MediaProbe.h"
 
 namespace uc::engines {
@@ -24,6 +25,8 @@ enum class HardwareEncoderMode {
 };
 
 struct FfmpegConversionOptions {
+    static FfmpegConversionOptions fromJob(const QString &target, const QVariantMap &values,
+                                           bool hardwareEnabled);
     QString targetFormatId;
     ConversionPreset preset{ConversionPreset::Medium};
     HardwareEncoderMode hwMode{HardwareEncoderMode::Auto};

@@ -16,7 +16,7 @@ class ImagePreviewDialog : public QDialog {
 
   public:
     explicit ImagePreviewDialog(const QString &sourceImagePath, const QString &targetFormatId,
-                                QWidget *parent = nullptr);
+                                QWidget *parent = nullptr, int quality = 85);
 
     int quality() const { return m_quality; }
 

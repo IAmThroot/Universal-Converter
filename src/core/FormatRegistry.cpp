@@ -58,7 +58,8 @@ void FormatRegistry::initializeFormats() {
     addFmt("ts", "MPEG Transport Stream", MediaCategory::Video, "ts", {"ts", "mts", "m2ts"}, {"video/mp2t"});
     addFmt("ogv", "Ogg Theora Video", MediaCategory::Video, "ogv", {"ogv", "ogx"}, {"video/ogg"});
     addFmt("3gp", "3GPP Mobile Video", MediaCategory::Video, "3gp", {"3gp", "3g2"}, {"video/3gpp"});
-    addFmt("mpeg", "MPEG-1/2 Video", MediaCategory::Video, "mpeg", {"mpeg", "mpg", "mpe"}, {"video/mpeg"});
+    addFmt("mpeg", "MPEG-1/2 Video", MediaCategory::Video, "mpeg", {"mpeg", "mpg", "mpe", "mpv"},
+           {"video/mpeg"});
     addFmt("vob", "DVD Video Object", MediaCategory::Video, "vob", {"vob"}, {"video/dvd"});
     addFmt("mxf", "Material Exchange Format", MediaCategory::Video, "mxf", {"mxf"}, {"application/mxf"});
     addFmt("gxf", "General Exchange Format", MediaCategory::Video, "gxf", {"gxf"}, {"application/gxf"});
@@ -220,7 +221,8 @@ const FormatDefinition* FormatRegistry::findByFilePath(const QString& filePath) 
     return findByExtension(info.suffix());
 }
 
-CompatibilityResult FormatRegistry::checkCompatibility(const QString& inputFormatId, const QString& outputFormatId) const {
+CompatibilityResult FormatRegistry::checkCompatibility(const QString &inputFormatId,
+                                                       const QString &outputFormatId, bool reencode) const {
     CompatibilityResult res;
     const auto* in = findById(inputFormatId);
     const auto* out = findById(outputFormatId);
@@ -249,7 +251,7 @@ CompatibilityResult FormatRegistry::checkCompatibility(const QString& inputForma
         return res;
     }
 
-    if (in->id == out->id) {
+    if (in->id == out->id && !reencode) {
         res.isSupported = false;
         res.reason = "Source and target formats are identical (no conversion needed).";
         return res;

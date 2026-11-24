@@ -58,7 +58,8 @@ public:
     QString normalizeFormatId(const QString& id) const;
 
     // Compatibility check with explanation
-    CompatibilityResult checkCompatibility(const QString& inputFormatId, const QString& outputFormatId) const;
+    CompatibilityResult checkCompatibility(const QString &inputFormatId, const QString &outputFormatId,
+                                           bool reencode = false) const;
     bool isConversionSupported(const QString& inputFormatId, const QString& outputFormatId) const;
 
     QList<FormatDefinition> availableOutputsForInput(const QString& inputFormatId) const;

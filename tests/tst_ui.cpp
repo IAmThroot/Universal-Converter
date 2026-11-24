@@ -16,6 +16,7 @@
 #include <QProgressBar>
 #include <QDialogButtonBox>
 #include "app/AppSettings.h"
+#include "app/Application.h"
 #include "app/ToolchainManager.h"
 #include "core/ConversionOrchestrator.h"
 #include "core/EngineCapabilityResolver.h"
@@ -96,6 +97,86 @@ class UiTests : public QObject {
         QVERIFY(!QFile::exists(m_data.filePath("Converted/review.html")));
         dialog.reject();
     }
+    void filteredPresetKeepsTarget() {
+        ui::FormatSelectorDialog selector("mp4");
+        auto *search = selector.findChild<QLineEdit *>();
+        auto *combo = selector.findChild<QComboBox *>();
+        auto *buttons = selector.findChild<QDialogButtonBox *>();
+        search->setText("webm");
+        const int index = combo->findData("compress_discord");
+        QVERIFY(index > 0);
+        combo->setCurrentIndex(index);
+        QVERIFY(search->text().isEmpty());
+        auto *ok = buttons->button(QDialogButtonBox::Ok);
+        if (!core::EngineCapabilityResolver::instance()
+                 .resolveRoute("mp4", "mp4", selector.selectedPresetOptions())
+                 .available) {
+            QVERIFY(!ok->isEnabled());
+            return;
+        }
+        QVERIFY(ok->isEnabled());
+        ok->click();
+        QCOMPARE(selector.selectedFormatId(), QString("mp4"));
+        QCOMPARE(selector.selectedPresetOptions().value("customAudioBitrateKbps").toInt(), 128);
+    }
+
+    void previewUsesBatchQuality() {
+        if (!app::ToolchainManager::instance().magick().isAvailable)
+            QSKIP("ImageMagick unavailable");
+        const QString path = m_data.filePath("preview.png");
+        QImage image(32, 32, QImage::Format_RGB32);
+        image.fill(Qt::blue);
+        QVERIFY(image.save(path));
+        ui::BatchSetupDialog batch({path});
+        auto button = [&](const QString &label) -> QPushButton * {
+            for (auto *widget : batch.findChildren<QPushButton *>())
+                if (widget->text() == label)
+                    return widget;
+            return nullptr;
+        };
+        auto *preview = button("Image Preview");
+        QVERIFY(preview && !preview->isEnabled());
+        QTimer::singleShot(0, []() {
+            auto *selector = qobject_cast<ui::FormatSelectorDialog *>(QApplication::activeModalWidget());
+            selector->findChild<QComboBox *>()->setCurrentIndex(
+                selector->findChild<QComboBox *>()->findData("web_ready_images"));
+            auto *ok = selector->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok);
+            if (ok->isEnabled())
+                ok->click();
+            else
+                selector->reject();
+        });
+        button("Choose Format / Preset")->click();
+        QVERIFY(preview->isEnabled());
+        for (bool accept : {false, true}) {
+            int initial = 0;
+            QTimer::singleShot(0, [&, accept]() {
+                auto *dialog = qobject_cast<ui::ImagePreviewDialog *>(QApplication::activeModalWidget());
+                initial = dialog->quality();
+                dialog->findChild<QSlider *>()->setValue(63);
+                if (accept)
+                    dialog->accept();
+                else
+                    dialog->reject();
+            });
+            preview->click();
+            QCOMPARE(initial, 82);
+            QCOMPARE(batch.entries().first().options.value("quality").toInt(), accept ? 63 : 82);
+        }
+    }
+
+    void desktopStartupReviewsAllFiles() {
+        QProcess child;
+        auto env = QProcessEnvironment::systemEnvironment();
+        env.insert("UC_DESKTOP_TEST_DIRECTORY", m_data.path());
+        child.setProcessEnvironment(env);
+        child.start(QCoreApplication::applicationFilePath(),
+                    {m_data.filePath("one image.png"), m_data.filePath("two.md")});
+        QVERIFY(child.waitForFinished(20000));
+        QCOMPARE(child.exitStatus(), QProcess::NormalExit);
+        QCOMPARE(child.exitCode(), 0);
+    }
+
     void blockedRouteHasReason() {
         const auto result = core::EngineCapabilityResolver::instance().resolveRoute("mp4", "docx");
         QVERIFY(!result.available);
@@ -388,5 +469,30 @@ class UiTests : public QObject {
         QVERIFY(queue.grab().save(directory + "/outcomes.png"));
     }
 };
-QTEST_MAIN(UiTests)
+int main(int argc, char **argv) {
+    if (qEnvironmentVariableIsSet("UC_DESKTOP_TEST_DIRECTORY")) {
+        app::Application application(argc, argv);
+        application.setProperty("testDataDirectory", qEnvironmentVariable("UC_DESKTOP_TEST_DIRECTORY"));
+        if (!application.init())
+            return 1;
+        int result = 2;
+        QTimer::singleShot(50, &application, [&]() {
+            auto *batch = qobject_cast<ui::BatchSetupDialog *>(QApplication::activeModalWidget());
+            if (batch) {
+                QStringList sources;
+                for (const auto &entry : batch->entries())
+                    sources << entry.input;
+                if (sources == application.arguments().mid(1))
+                    result = 0;
+                batch->reject();
+            }
+            application.quit();
+        });
+        application.exec();
+        return result;
+    }
+    QApplication application(argc, argv);
+    UiTests tests;
+    return QTest::qExec(&tests, argc, argv);
+}
 #include "tst_ui.moc"

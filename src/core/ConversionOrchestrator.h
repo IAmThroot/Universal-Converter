@@ -42,7 +42,7 @@ class ConversionOrchestrator : public QObject {
     int activeJobsForEngine(EngineType engine) const;
 
     // Queue Management
-    void addJob(std::shared_ptr<ConversionJob> job);
+    void addJob(std::shared_ptr<ConversionJob> job, bool automated = false);
     void cancelJob(const QString &jobId);
     void cancelAllJobs();
     void shutdown();
@@ -76,6 +76,8 @@ class ConversionOrchestrator : public QObject {
     void onJobFinishedInternal(const QString &jobId, JobState finalState);
     bool isTransientError(const QString &errorMsg, const QString &diagnostic) const;
 
+    QSet<QString> m_automatedJobs;
+    QStringList m_finishedAutomated;
     bool m_stopping{false};
     int m_maxConcurrency{4};
     int m_maxFfmpegConcurrency{2};

@@ -4,6 +4,7 @@
 #include <memory>
 #include <atomic>
 #include <QThreadPool>
+#include <QTemporaryDir>
 #include "../core/ConversionJob.h"
 #include "../core/ProcessRunner.h"
 #include "ImageMagickCapabilities.h"
@@ -35,6 +36,8 @@ class ImageMagickEngine : public QObject {
     struct RunningContext {
         std::shared_ptr<core::ConversionJob> job;
         std::shared_ptr<core::ProcessRunner> runner;
+        explicit RunningContext(const QString &directoryTemplate) : directory(directoryTemplate) {}
+        QTemporaryDir directory;
         QString tempOutputPath;
         QString finalOutputPath;
         std::atomic_bool isCancelled{false};

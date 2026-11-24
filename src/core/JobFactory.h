@@ -8,6 +8,8 @@ struct JobCreation {
 };
 class JobFactory {
   public:
+    static JobCreation retry(const QString &input, const QString &output, const QVariantMap &options,
+                             const QString &previousOutput);
     static JobCreation create(const QString &input, const QString &output, const QVariantMap &options,
                               app::DestinationMode mode, const QString &destination);
 };

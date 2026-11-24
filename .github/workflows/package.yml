@@ -27,7 +27,7 @@ jobs:
           # 1. Download official standalone Pandoc (statically linked binary)
           if [ ! -f "engines/pandoc/pandoc" ]; then
             echo "--> Downloading Pandoc for Linux..."
-            curl -sSL "https://github.com/jgm/pandoc/releases/download/3.1.13/pandoc-3.1.13-linux-amd64.tar.gz" -o pandoc.tar.gz
+            curl -fsSL --retry 3 "https://github.com/jgm/pandoc/releases/download/3.1.13/pandoc-3.1.13-linux-amd64.tar.gz" -o pandoc.tar.gz
             tar -xzf pandoc.tar.gz
             cp pandoc-3.1.13/bin/pandoc engines/pandoc/pandoc
             chmod +x engines/pandoc/pandoc
@@ -37,7 +37,7 @@ jobs:
           # 2. Download official standalone Typst (musl statically linked binary)
           if [ ! -f "engines/typst/typst" ]; then
             echo "--> Downloading Typst for Linux..."
-            curl -sSL "https://github.com/typst/typst/releases/download/v0.12.0/typst-x86_64-unknown-linux-musl.tar.xz" -o typst.tar.xz
+            curl -fsSL --retry 3 "https://github.com/typst/typst/releases/download/v0.12.0/typst-x86_64-unknown-linux-musl.tar.xz" -o typst.tar.xz
             tar -xJf typst.tar.xz
             cp typst-x86_64-unknown-linux-musl/typst engines/typst/typst
             cp typst-x86_64-unknown-linux-musl/LICENSE engines/typst/LICENSE 2>/dev/null || true
@@ -50,11 +50,12 @@ jobs:
         run: |
           sudo wget -q -O /usr/local/bin/appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           sudo chmod +x /usr/local/bin/appimagetool
-          echo "APPIMAGE_EXTRACT_AND_RUN=1" >> $GITHUB_ENV
+          curl -fsSL --retry 3 https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64 -o "$RUNNER_TEMP/runtime-x86_64"
+          echo "APPIMAGE_RUNTIME_FILE=$RUNNER_TEMP/runtime-x86_64" >> "$GITHUB_ENV"
 
       - name: Build & Package AppImage
         env:
-          APPIMAGE_EXTRACT_AND_RUN: 1
+          APPIMAGE_EXTRACT_AND_RUN: "1"
         run: |
           chmod +x scripts/package-linux-appimage.sh
           ./scripts/package-linux-appimage.sh
@@ -70,6 +71,12 @@ jobs:
           echo 'Package smoke' > /tmp/uc-package-smoke.md
           dist/UniversalConverter.AppDir/usr/bin/engines/pandoc/pandoc /tmp/uc-package-smoke.md --pdf-engine="$PWD/dist/UniversalConverter.AppDir/usr/bin/engines/typst/typst" -o /tmp/uc-package-smoke.pdf
           test -s /tmp/uc-package-smoke.pdf
+          image="$PWD/dist/UniversalConverter-x86_64.AppImage"
+          cd "$RUNNER_TEMP"
+          "$image" --appimage-extract > /dev/null
+          status=0
+          timeout 5s ./squashfs-root/AppRun || status=$?
+          test "$status" -eq 124
 
       - name: Upload Linux AppImage
         uses: actions/upload-artifact@v4
@@ -80,7 +87,7 @@ jobs:
 
   build-windows:
     name: Windows x64 (NSIS + Portable ZIP)
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -108,26 +115,44 @@ jobs:
           mkdir -p engines/pandoc engines/typst
           # 1. Download official standalone Pandoc Windows zip
           echo "--> Downloading Pandoc for Windows..."
-          curl -sSL "https://github.com/jgm/pandoc/releases/download/3.1.13/pandoc-3.1.13-windows-x86_64.zip" -o pandoc-win.zip
+          curl -fsSL --retry 3 "https://github.com/jgm/pandoc/releases/download/3.1.13/pandoc-3.1.13-windows-x86_64.zip" -o pandoc-win.zip
           unzip -q pandoc-win.zip
           cp pandoc-3.1.13/pandoc.exe engines/pandoc/pandoc.exe
           rm -rf pandoc-win.zip pandoc-3.1.13
 
           # 2. Download official standalone Typst Windows zip
           echo "--> Downloading Typst for Windows..."
-          curl -sSL "https://github.com/typst/typst/releases/download/v0.12.0/typst-x86_64-pc-windows-msvc.zip" -o typst-win.zip
+          curl -fsSL --retry 3 "https://github.com/typst/typst/releases/download/v0.12.0/typst-x86_64-pc-windows-msvc.zip" -o typst-win.zip
           unzip -q typst-win.zip
           cp typst-x86_64-pc-windows-msvc/typst.exe engines/typst/typst.exe
           cp typst-x86_64-pc-windows-msvc/LICENSE engines/typst/LICENSE 2>/dev/null || true
           cp typst-x86_64-pc-windows-msvc/NOTICE engines/typst/NOTICE 2>/dev/null || true
           rm -rf typst-win.zip typst-x86_64-pc-windows-msvc
 
+      - name: Ensure media tools are available for integration tests
+        shell: pwsh
+        run: |
+          if (!(Get-Command ffmpeg -ErrorAction SilentlyContinue) -or !(Get-Command ffprobe -ErrorAction SilentlyContinue)) {
+            choco install ffmpeg -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw "FFmpeg installation failed" }
+          }
+          if (!(Get-Command magick -ErrorAction SilentlyContinue)) {
+            choco install imagemagick -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw "ImageMagick installation failed" }
+          }
+          $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+          $env:Path = "$env:Path;$machinePath"
+          foreach ($tool in "ffmpeg", "ffprobe", "magick") {
+            $exe = Get-Command $tool -CommandType Application -ErrorAction Stop | Select-Object -First 1
+            Split-Path $exe.Source | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+
       - name: Configure CMake
         shell: bash
         run: |
           cmake -B build -S . -G "Ninja" \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="${Qt6_DIR}"
+            -DCMAKE_PREFIX_PATH="${QT_ROOT_DIR}"
 
       - name: Build Universal Converter
         shell: bash
@@ -172,6 +197,8 @@ jobs:
         run: |
           cd build
           cpack -C Release --verbose
+          test -s UniversalConverter-*-win64.exe
+          test -s UniversalConverter-*-win64.zip
 
       - name: Smoke test portable package
         shell: pwsh
@@ -197,41 +224,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: UniversalConverter-Windows-x64
+          if-no-files-found: error
           path: |
             build/UniversalConverter-*-win64.exe
             build/UniversalConverter-*-win64.zip
 
 
   sanitizer:
-    name: Linux sanitizers
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - name: Dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build qt6-base-dev libqt6svg6-dev ffmpeg imagemagick pandoc librsvg2-bin
-      - name: Install PDF typesetter
-        run: |
-          mkdir -p engines/typst
-          curl --fail --location --retry 3 https://github.com/typst/typst/releases/download/v0.12.0/typst-x86_64-unknown-linux-musl.tar.xz -o "$RUNNER_TEMP/typst.tar.xz"
-          tar -xJf "$RUNNER_TEMP/typst.tar.xz" -C "$RUNNER_TEMP"
-          install -m 755 "$RUNNER_TEMP/typst-x86_64-unknown-linux-musl/typst" engines/typst/typst
-          engines/typst/typst --version
-      - name: Build and test
-        env:
-          QT_QPA_PLATFORM: offscreen
-        run: |
-          cmake -S . -B build -G Ninja -DENABLE_SANITIZERS=ON -DCMAKE_BUILD_TYPE=Debug
-          cmake --build build --parallel 2
-          ctest --test-dir build --verbose --output-on-failure
-      - name: Upload sanitizer test diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: sanitizer-test-diagnostics
-          path: |
-            build/Testing/Temporary/
-            build/*-results.xml
-          if-no-files-found: ignore
+    # Branch and PR pushes already run test.yml. For tags, gate publication on that same suite.
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/test.yml
 
   release:
     name: Publish GitHub Release
@@ -250,15 +252,22 @@ jobs:
       - name: Stage release files
         run: |
           mkdir -p dist-release
-          find release-assets/ -type f -exec cp -v {} dist-release/ \;
-          echo "Files to upload:"
-          ls -la dist-release/
+          version="${GITHUB_REF_NAME#v}"
+          for file in "UniversalConverter-x86_64.AppImage" "UniversalConverter-$version-win64.exe" "UniversalConverter-$version-win64.zip"; do
+            case "$file" in
+              *.AppImage) source="release-assets/UniversalConverter-Linux-x86_64/$file" ;;
+              *) source="release-assets/UniversalConverter-Windows-x64/$file" ;;
+            esac
+            test -s "$source"
+            cp "$source" dist-release/
+          done
 
       - name: Create or Update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: "Universal Converter ${{ github.ref_name }}"
           files: dist-release/*
+          fail_on_unmatched_files: true
           generate_release_notes: true
           draft: false
           prerelease: false

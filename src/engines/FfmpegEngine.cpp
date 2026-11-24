@@ -195,36 +195,7 @@ bool FfmpegEngine::executeJob(std::shared_ptr<core::ConversionJob> job) {
         } else {
             const auto sysCaps = core::SystemInfo::probe();
 
-            FfmpegConversionOptions options;
-            options.targetFormatId = targetFormat;
-            options.hwMode = hardwareEnabled ? HardwareEncoderMode::Auto : HardwareEncoderMode::Disabled;
-
-            const auto opts = jobOptions;
-            if (opts.contains("customVideoCodec"))
-                options.customVideoCodec = opts["customVideoCodec"].toString();
-            if (opts.contains("customVideoBitrateKbps"))
-                options.customVideoBitrateKbps = opts["customVideoBitrateKbps"].toInt();
-            if (opts.contains("customAudioCodec"))
-                options.customAudioCodec = opts["customAudioCodec"].toString();
-            if (opts.contains("customAudioBitrateKbps"))
-                options.customAudioBitrateKbps = opts["customAudioBitrateKbps"].toInt();
-            if (opts.contains("customAudioSampleRate"))
-                options.customAudioSampleRate = opts["customAudioSampleRate"].toInt();
-            if (opts.contains("customAudioChannels"))
-                options.customAudioChannels = opts["customAudioChannels"].toInt();
-            if (opts.contains("customWidth"))
-                options.customWidth = opts["customWidth"].toInt();
-            if (opts.contains("customHeight"))
-                options.customHeight = opts["customHeight"].toInt();
-            if (opts.contains("customFps"))
-                options.customFps = opts["customFps"].toInt();
-            if (opts.contains("crf"))
-                options.crf = opts["crf"].toInt();
-            if (opts.contains("preset"))
-                options.preset = static_cast<ConversionPreset>(opts["preset"].toInt());
-            if (opts.contains("stripMetadata"))
-                options.stripMetadata = opts["stripMetadata"].toBool();
-
+            const auto options = FfmpegConversionOptions::fromJob(targetFormat, jobOptions, hardwareEnabled);
             argResult = FfmpegArgBuilder::buildArguments(inputPath, tempOut, probe, options,
                                                          sysCaps.availableHwEncoders);
         }

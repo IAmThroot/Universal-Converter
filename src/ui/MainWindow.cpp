@@ -212,8 +212,6 @@ void MainWindow::onFilesDropped(const QStringList &filePaths) {
         auto result = core::JobFactory::create(entry.input, entry.output, entry.options,
                                                dialog.destinationMode(), dialog.destination());
         if (!result.job) {
-            for (const auto &job : jobs)
-                core::OutputPathPlanner::releasePath(job->finalOutputPath());
             QMessageBox::warning(this, "Batch needs attention", result.error);
             return;
         }
@@ -255,9 +253,8 @@ void MainWindow::syncWatchFolders() {
         if (m_watchFolderService->hasFolder(cfg.id)) {
             m_watchFolderService->updateFolder(cfg);
         } else {
-            m_watchFolderService->addFolder(cfg);
+            m_watchFolderService->addFolder(cfg, true);
         }
-        m_watchFolderService->setFolderEnabled(cfg.id, cfg.isEnabled);
     }
 
     // Remove any folders that were removed in Settings
@@ -280,9 +277,8 @@ void MainWindow::onRetryHistoryJob(const core::HistoryRecord &record) {
         return;
     }
 
-    const auto &settings = app::AppSettings::instance();
-    auto result = core::JobFactory::create(record.primaryInputPath, record.outputFormatId, record.options,
-                                           settings.destinationMode(), settings.customDestinationPath());
+    auto result = core::JobFactory::retry(record.primaryInputPath, record.outputFormatId, record.options,
+                                          record.finalOutputPath);
     if (!result.job) {
         QMessageBox::warning(this, "Cannot retry", result.error);
         return;

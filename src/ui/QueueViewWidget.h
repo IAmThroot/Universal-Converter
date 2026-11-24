@@ -30,6 +30,9 @@ private slots:
 
 private:
     void setupUi();
+    void updateRow(const QString &id);
+    void updateSummary();
+    QHash<QString, QTreeWidgetItem *> m_rows;
 
     std::shared_ptr<core::ConversionOrchestrator> m_orchestrator;
     QTreeWidget* m_treeWidget;

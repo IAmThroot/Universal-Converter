@@ -15,8 +15,9 @@
 namespace uc::ui {
 
 ImagePreviewDialog::ImagePreviewDialog(const QString &sourceImagePath, const QString &targetFormatId,
-                                       QWidget *parent)
-    : QDialog(parent), m_sourcePath(sourceImagePath), m_targetFormatId(targetFormatId) {
+                                       QWidget *parent, int quality)
+    : QDialog(parent), m_sourcePath(sourceImagePath), m_targetFormatId(targetFormatId),
+      m_quality(qBound(1, quality, 100)) {
     setWindowTitle("Before & After Image Quality Preview");
     resize(780, 560);
 
@@ -108,8 +109,8 @@ void ImagePreviewDialog::setupUi() {
     controlLayout->addWidget(qualityLabel);
 
     m_qualitySlider = new QSlider(Qt::Horizontal, this);
-    m_qualitySlider->setRange(10, 100);
-    m_qualitySlider->setValue(85);
+    m_qualitySlider->setRange(1, 100);
+    m_qualitySlider->setValue(m_quality);
     m_qualitySlider->setStyleSheet(
         "QSlider::groove:horizontal { background: #1e293b; height: 6px; border-radius: 3px; }"
         "QSlider::sub-page:horizontal { background: #10b981; border-radius: 3px; }"
@@ -117,7 +118,7 @@ void ImagePreviewDialog::setupUi() {
         "-4px; border-radius: 7px; }");
     controlLayout->addWidget(m_qualitySlider, 1);
 
-    m_qualityValueLabel = new QLabel("85%", this);
+    m_qualityValueLabel = new QLabel(QString("%1%").arg(m_quality), this);
     m_qualityValueLabel->setFixedWidth(40);
 
     controlLayout->addWidget(m_qualityValueLabel);
@@ -163,7 +164,7 @@ void ImagePreviewDialog::updatePreview() {
     options.height = 540;
     options.preserveAspectRatio = true;
     options.preserveAnimation = false;
-    auto args = engines::ImageMagickArgBuilder::buildArguments(m_sourcePath + "[0]", output, options);
+    auto args = engines::ImageMagickArgBuilder::buildArguments(m_sourcePath, output, options);
     m_previewInfoLabel->setText("Rendering sample…");
     m_previewImgLabel->clear();
     connect(m_runner.get(), &core::ProcessRunner::finished, this,

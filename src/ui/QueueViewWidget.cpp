@@ -21,7 +21,11 @@ QueueViewWidget::QueueViewWidget(std::shared_ptr<core::ConversionOrchestrator> o
     refreshQueue();
     auto *timer = new QTimer(this);
     timer->setInterval(1000);
-    connect(timer, &QTimer::timeout, this, &QueueViewWidget::refreshQueue);
+    connect(timer, &QTimer::timeout, this, [this]() {
+        if (m_orchestrator)
+            for (const auto &job : m_orchestrator->activeJobs())
+                updateRow(job->id());
+    });
     timer->start();
 
     if (m_orchestrator) {
@@ -36,7 +40,10 @@ QueueViewWidget::QueueViewWidget(std::shared_ptr<core::ConversionOrchestrator> o
         connect(m_orchestrator.get(), &core::ConversionOrchestrator::jobFinished, this,
                 &QueueViewWidget::onJobFinished);
         connect(m_orchestrator.get(), &core::ConversionOrchestrator::jobRemoved, this,
-                [this](const QString &) { refreshQueue(); });
+                [this](const QString &id) {
+                    delete m_rows.take(id);
+                    updateSummary();
+                });
     }
 }
 
@@ -108,10 +115,8 @@ void QueueViewWidget::setupUi() {
         if (action == cancel)
             m_orchestrator->cancelJob(job->id());
         if (action == retry) {
-            auto &settings = app::AppSettings::instance();
-            auto result =
-                core::JobFactory::create(job->primaryInputPath(), job->outputFormatId(), job->options(),
-                                         settings.destinationMode(), settings.customDestinationPath());
+            auto result = core::JobFactory::retry(job->primaryInputPath(), job->outputFormatId(),
+                                                  job->options(), job->finalOutputPath());
             if (result.job)
                 m_orchestrator->addJob(result.job);
             else
@@ -178,176 +183,85 @@ void QueueViewWidget::refreshQueue() {
     if (!m_orchestrator)
         return;
 
-    // Incremental update: reuse existing rows keyed by job id instead of
-    // full clear() + new QTreeWidgetItem per signal (jank at 100s of jobs).
-    const auto jobs = m_orchestrator->allJobs();
-    QSet<QString> liveIds;
-    liveIds.reserve(jobs.size());
-    for (const auto &job : jobs) {
-        liveIds.insert(job->id());
-    }
-    // Remove stale rows.
-    for (int i = m_treeWidget->topLevelItemCount() - 1; i >= 0; --i) {
-        auto *item = m_treeWidget->topLevelItem(i);
-        if (!liveIds.contains(item->data(0, Qt::UserRole).toString())) {
-            delete m_treeWidget->takeTopLevelItem(i);
-        }
-    }
-    QHash<QString, QTreeWidgetItem *> existing;
-    for (int i = 0; i < m_treeWidget->topLevelItemCount(); ++i) {
-        auto *item = m_treeWidget->topLevelItem(i);
-        existing.insert(item->data(0, Qt::UserRole).toString(), item);
-    }
-    // Upsert rows in queue order.
-    for (int row = 0; row < jobs.size(); ++row) {
-        const auto &job = jobs.at(row);
-        QTreeWidgetItem *item = nullptr;
-        item = existing.value(job->id(), nullptr);
-        if (!item) {
-            item = new QTreeWidgetItem();
-            item->setData(0, Qt::UserRole, job->id());
-            m_treeWidget->insertTopLevelItem(row, item);
-        } else {
-            const int cur = m_treeWidget->indexOfTopLevelItem(item);
-            if (cur != row) {
-                m_treeWidget->takeTopLevelItem(cur);
-                m_treeWidget->insertTopLevelItem(qMin(row, m_treeWidget->topLevelItemCount()), item);
-            }
-        }
-        const QFileInfo fi(job->primaryInputPath());
-        item->setText(0, fi.fileName());
-        item->setText(1, job->outputFormatId().toUpper());
-        item->setText(2, core::jobStateToString(job->state()));
-        item->setToolTip(2, job->statusMessage());
-        auto *progress = qobject_cast<QProgressBar *>(m_treeWidget->itemWidget(item, 4));
-        if (!progress) {
-            progress = new QProgressBar(m_treeWidget);
-            m_treeWidget->setItemWidget(item, 4, progress);
-        }
-        progress->setRange(0, job->hasKnownProgress() || job->isTerminal() ? 100 : 0);
-        progress->setValue(job->state() == core::JobState::Completed ? 100
-                                                                     : qMax(0, job->progressPercentage()));
-        if (job->startedAt().isValid()) {
-            const auto end = job->completedAt().isValid() ? job->completedAt() : QDateTime::currentDateTime();
-            QString timing = QString("%1s").arg(job->startedAt().secsTo(end));
-            if (!job->isTerminal() && job->etaSeconds() >= 0)
-                timing += QString(" / ~%1s remaining").arg(job->etaSeconds());
-            if (!job->isTerminal() && job->speed() > 0)
-                timing += QString(" · %1×").arg(job->speed(), 0, 'f', 1);
-            item->setText(5, timing);
-        }
-        item->setText(3, core::engineTypeToString(job->engine()));
+    for (const auto &job : m_orchestrator->allJobs())
+        updateRow(job->id());
+    updateSummary();
+}
 
-        if (job->state() == core::JobState::Completed) {
-            item->setForeground(2, QColor("#10b981"));
-        } else if (job->state() == core::JobState::Failed) {
-            item->setForeground(2, QColor("#ef4444"));
-        } else if (job->state() == core::JobState::Cancelled) {
-            item->setForeground(2, QColor("#94a3b8"));
-        } else {
-            item->setForeground(2, QColor("#38bdf8"));
-        }
+void QueueViewWidget::updateRow(const QString &id) {
+    const auto job = m_orchestrator->findJob(id);
+    if (!job)
+        return;
+    auto *item = m_rows.value(id);
+    if (!item) {
+        item = new QTreeWidgetItem(m_treeWidget);
+        item->setData(0, Qt::UserRole, id);
+        m_rows.insert(id, item);
     }
+    const QFileInfo fi(job->primaryInputPath());
+    item->setText(0, fi.fileName());
+    item->setText(1, job->outputFormatId().toUpper());
+    item->setText(2, core::jobStateToString(job->state()));
+    item->setToolTip(2, job->statusMessage());
+    auto *progress = qobject_cast<QProgressBar *>(m_treeWidget->itemWidget(item, 4));
+    if (!progress) {
+        progress = new QProgressBar(m_treeWidget);
+        m_treeWidget->setItemWidget(item, 4, progress);
+    }
+    progress->setRange(0, job->hasKnownProgress() || job->isTerminal() ? 100 : 0);
+    progress->setValue(job->state() == core::JobState::Completed ? 100 : qMax(0, job->progressPercentage()));
+    if (job->startedAt().isValid()) {
+        const auto end = job->completedAt().isValid() ? job->completedAt() : QDateTime::currentDateTime();
+        QString timing = QString("%1s").arg(job->startedAt().secsTo(end));
+        if (!job->isTerminal() && job->etaSeconds() >= 0)
+            timing += QString(" / ~%1s remaining").arg(job->etaSeconds());
+        if (!job->isTerminal() && job->speed() > 0)
+            timing += QString(" · %1×").arg(job->speed(), 0, 'f', 1);
+        item->setText(5, timing);
+    }
+    item->setText(3, core::engineTypeToString(job->engine()));
 
-    m_summaryLabel->setText(jobs.isEmpty() ? "Queue is empty" : m_orchestrator->summary());
+    if (job->state() == core::JobState::Completed) {
+        item->setForeground(2, QColor("#10b981"));
+    } else if (job->state() == core::JobState::Failed) {
+        item->setForeground(2, QColor("#ef4444"));
+    } else if (job->state() == core::JobState::Cancelled) {
+        item->setForeground(2, QColor("#94a3b8"));
+    } else {
+        item->setForeground(2, QColor("#38bdf8"));
+    }
+}
+
+void QueueViewWidget::updateSummary() {
+    m_summaryLabel->setText(m_rows.isEmpty() ? "Queue is empty" : m_orchestrator->summary());
     m_cancelBtn->setEnabled(!m_orchestrator->activeJobs().isEmpty() ||
                             !m_orchestrator->queuedJobs().isEmpty());
     m_clearBtn->setEnabled(!m_orchestrator->completedJobs().isEmpty());
 }
 
-static QTreeWidgetItem *findItemByJobId(QTreeWidget *tree, const QString &jobId) {
-    if (!tree)
-        return nullptr;
-    for (int i = 0; i < tree->topLevelItemCount(); ++i) {
-        auto *item = tree->topLevelItem(i);
-        if (item && item->data(0, Qt::UserRole).toString() == jobId) {
-            return item;
-        }
-    }
-    return nullptr;
+void QueueViewWidget::onJobAdded(const QString &id) {
+    updateRow(id);
+    updateSummary();
 }
-
-void QueueViewWidget::onJobAdded(const QString & /*jobId*/) { refreshQueue(); }
-
-void QueueViewWidget::onJobStarted(const QString &jobId) {
-    auto *item = findItemByJobId(m_treeWidget, jobId);
-    if (item) {
-        item->setText(2, "Running...");
-        item->setForeground(2, QColor("#38bdf8"));
-    }
+void QueueViewWidget::onJobStarted(const QString &id) {
+    updateRow(id);
+    updateSummary();
 }
-
-void QueueViewWidget::onJobProgressChanged(const QString &jobId, int progress, const QString &statusMessage) {
-    auto *item = findItemByJobId(m_treeWidget, jobId);
-    if (!item)
-        return;
-
-    QString text;
-    if (progress >= 0) {
-        text = statusMessage.isEmpty() ? QString("%1%").arg(progress)
-                                       : QString("%1% - %2").arg(progress).arg(statusMessage);
-    } else {
-        text = statusMessage.isEmpty() ? "Processing..." : statusMessage;
-    }
-    item->setText(2, core::jobStateToString(m_orchestrator->findJob(jobId)->state()));
-    item->setToolTip(2, text);
-    item->setForeground(2, QColor("#38bdf8"));
+void QueueViewWidget::onJobProgressChanged(const QString &id, int, const QString &) { updateRow(id); }
+void QueueViewWidget::onJobStateChanged(const QString &id, core::JobState, const QString &) { updateRow(id); }
+void QueueViewWidget::onJobFinished(const QString &id, core::JobState) {
+    updateRow(id);
+    updateSummary();
 }
-
-void QueueViewWidget::onJobStateChanged(const QString &jobId, core::JobState state, const QString &message) {
-    auto *item = findItemByJobId(m_treeWidget, jobId);
-    if (!item)
-        return;
-
-    QString text = message;
-    switch (state) {
-    case core::JobState::Queued:
-        if (text.isEmpty())
-            text = "Queued";
-        item->setForeground(2, QColor("#a1a1aa"));
-        break;
-    case core::JobState::Preparing:
-        if (text.isEmpty())
-            text = "Preparing...";
-        item->setForeground(2, QColor("#facc15"));
-        break;
-    case core::JobState::Running:
-        if (text.isEmpty())
-            text = "Running...";
-        item->setForeground(2, QColor("#38bdf8"));
-        break;
-    case core::JobState::Completed:
-        if (text.isEmpty())
-            text = "Completed";
-        item->setForeground(2, QColor("#10b981"));
-        break;
-    case core::JobState::Failed:
-        if (text.isEmpty())
-            text = "Failed";
-        item->setForeground(2, QColor("#ef4444"));
-        break;
-    case core::JobState::Cancelled:
-        if (text.isEmpty())
-            text = "Cancelled";
-        item->setForeground(2, QColor("#71717a"));
-        break;
-    }
-    item->setText(2, core::jobStateToString(m_orchestrator->findJob(jobId)->state()));
-    item->setToolTip(2, text);
-}
-
-void QueueViewWidget::onJobFinished(const QString & /*jobId*/, core::JobState /*state*/) { refreshQueue(); }
 
 void QueueViewWidget::onCancelSelected() {
     if (!m_orchestrator)
         return;
-    const auto items = m_treeWidget->selectedItems();
-    for (auto *item : items) {
-        if (item) {
-            const QString jobId = item->data(0, Qt::UserRole).toString();
-            m_orchestrator->cancelJob(jobId);
-        }
-    }
+    QStringList ids;
+    for (const auto *item : m_treeWidget->selectedItems())
+        ids << item->data(0, Qt::UserRole).toString();
+    for (const auto &id : ids)
+        m_orchestrator->cancelJob(id);
 }
 
 void QueueViewWidget::onClearCompleted() {

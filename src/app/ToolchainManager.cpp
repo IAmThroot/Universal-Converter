@@ -43,6 +43,10 @@ void ToolchainManager::scanAll(const QString &ffmpegOverride, const QString &mag
     // 1. Resolve FFmpeg
     auto ffmpeg = EngineResolver::resolve("ffmpeg", ffmpegOverride, "-version");
 
+    if (ffmpeg.isAvailable)
+        core::SystemInfo::probe(
+            ffmpeg.executablePath); // Warm the hardware capability cache on the scan thread.
+
     // 2. Resolve FFprobe using FFmpeg directory as companion search path to prevent mismatched pairings
     QString ffmpegDir;
     if (!ffmpeg.executablePath.isEmpty()) {
@@ -65,8 +69,6 @@ void ToolchainManager::scanAll(const QString &ffmpegOverride, const QString &mag
 
     // 5. Phase 4: Modern Image & Vector Optimization Tools
     auto rsvgConvert = EngineResolver::resolve("rsvg-convert", QString(), "--version");
-    auto avifenc = EngineResolver::resolve("avifenc", QString(), "--version");
-    auto cwebp = EngineResolver::resolve("cwebp", QString(), "-version");
     auto oxipng = EngineResolver::resolve("oxipng", QString(), "--version");
     auto pngquant = EngineResolver::resolve("pngquant", QString(), "--version");
 
@@ -76,8 +78,8 @@ void ToolchainManager::scanAll(const QString &ffmpegOverride, const QString &mag
         imageCaps.discover(magick.executablePath);
     if (pandoc.isAvailable)
         documentCaps.discover(pandoc.executablePath);
-    auto publish = [this, ffmpeg, ffprobe, magick, pandoc, rsvgConvert, avifenc, cwebp, oxipng, pngquant,
-                    imageCaps, documentCaps]() {
+    auto publish = [this, ffmpeg, ffprobe, magick, pandoc, rsvgConvert, oxipng, pngquant, imageCaps,
+                    documentCaps]() {
         {
             QMutexLocker locker(&m_mutex);
             // Queued scans run in order; publish only the last requested snapshot.
@@ -90,8 +92,6 @@ void ToolchainManager::scanAll(const QString &ffmpegOverride, const QString &mag
             m_magick = magick;
             m_pandoc = pandoc;
             m_rsvgConvert = rsvgConvert;
-            m_avifenc = avifenc;
-            m_cwebp = cwebp;
             m_oxipng = oxipng;
             m_pngquant = pngquant;
             if (m_pendingScans > 0)

@@ -21,7 +21,9 @@ class ConversionJob : public QObject {
     explicit ConversionJob(const QString &id, const QStringList &inputPaths, const QString &inputFormatId,
                            const QString &outputFormatId, const QString &destinationPath,
                            EngineType engine = EngineType::Unknown, QObject *parent = nullptr);
-    ~ConversionJob() override = default;
+    ~ConversionJob() override;
+    void adoptReservedOutput(const QString &path);
+    void releaseReservedOutput();
 
     // Getters
     QString id() const { return m_id; }
@@ -90,6 +92,7 @@ class ConversionJob : public QObject {
     QString m_outputFormatId;
     QString m_destinationDirectory;
     QString m_finalOutputPath;
+    QString m_reservedOutput;
     EngineType m_engine{EngineType::Unknown};
 
     JobState m_state{JobState::Queued};

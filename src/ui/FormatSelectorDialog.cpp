@@ -99,9 +99,10 @@ FormatSelectorDialog::FormatSelectorDialog(const QString &sourceFormatId, QWidge
     }
 
     auto *btnBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+    m_ok = btnBox->button(QDialogButtonBox::Ok);
     connect(btnBox, &QDialogButtonBox::accepted, this, [this]() {
         auto *item = m_listWidget->currentItem();
-        if (item && (item->flags() & Qt::ItemIsEnabled)) {
+        if (item && !item->isHidden() && m_ok->isEnabled() && (item->flags() & Qt::ItemIsEnabled)) {
             m_selectedFormatId = item->data(Qt::UserRole).toString();
             if (m_applyToAllCheck) {
                 m_applyToAllRemaining = m_applyToAllCheck->isChecked();
@@ -252,14 +253,18 @@ void FormatSelectorDialog::onDeletePresetClicked() {
     m_selectedPresetId.clear();
     m_selectedPresetOptions.clear();
     refreshPresets();
+    populateFormats();
 }
 
 void FormatSelectorDialog::onPresetSelected(int index) {
     if (!m_presetCombo || index <= 0) {
         if (m_presetDescLabel)
             m_presetDescLabel->clear();
+        const bool hadPreset = !m_selectedPresetId.isEmpty();
         m_selectedPresetId.clear();
         m_selectedPresetOptions.clear();
+        if (hadPreset && m_listWidget)
+            populateFormats();
         if (m_editPresetBtn)
             m_editPresetBtn->setEnabled(false);
         if (m_deletePresetBtn)
@@ -274,6 +279,7 @@ void FormatSelectorDialog::onPresetSelected(int index) {
 
     m_selectedPresetId = preset->id;
     m_selectedPresetOptions = preset->options;
+    m_selectedPresetOptions.insert("presetTarget", preset->targetFormatId);
     m_presetDescLabel->setText(preset->description);
 
     if (m_editPresetBtn)
@@ -281,31 +287,28 @@ void FormatSelectorDialog::onPresetSelected(int index) {
     if (m_deletePresetBtn)
         m_deletePresetBtn->setEnabled(!preset->isBuiltIn);
 
-    // Select target format in list
-    for (int i = 0; i < m_listWidget->count(); ++i) {
-        auto *item = m_listWidget->item(i);
-        if (item && item->data(Qt::UserRole).toString() == preset->targetFormatId) {
-            m_listWidget->setCurrentItem(item);
-            break;
-        }
-    }
+    m_searchEdit->clear();
+    populateFormats();
 }
 
 void FormatSelectorDialog::populateFormats() {
+    QSignalBlocker blocker(m_listWidget);
     m_listWidget->clear();
+    m_ok->setEnabled(false);
     m_availableFormats = core::FormatRegistry::instance().availableOutputsForInput(m_sourceFormatId);
 
-    const QString filter = m_searchEdit ? m_searchEdit->text().trimmed().toLower() : QString();
+    const auto *preset = core::PresetRegistry::instance().findById(m_selectedPresetId);
+    if (preset && preset->targetFormatId == m_sourceFormatId)
+        m_availableFormats.append(*core::FormatRegistry::instance().findById(m_sourceFormatId));
+    m_detailLabel->setText(preset ? QString("Preset target %1 is unavailable for this source.")
+                                        .arg(preset->targetFormatId.toHtmlEscaped())
+                                  : QString());
     auto &resolver = core::EngineCapabilityResolver::instance();
 
     std::stable_sort(m_availableFormats.begin(), m_availableFormats.end(),
                      [](const auto &a, const auto &b) { return a.category < b.category; });
     int previousCategory = -1;
     for (const auto &fmt : m_availableFormats) {
-        if (!filter.isEmpty() && !fmt.id.contains(filter) && !fmt.name.toLower().contains(filter)) {
-            continue;
-        }
-
         if (int(fmt.category) != previousCategory) {
             const QStringList categories{"Video", "Audio", "Images", "Documents", "Subtitles"};
             auto *heading = new QListWidgetItem(categories.value(int(fmt.category)), m_listWidget);
@@ -332,7 +335,9 @@ void FormatSelectorDialog::populateFormats() {
 
         auto *item = new QListWidgetItem(label, m_listWidget);
         item->setData(Qt::UserRole, fmt.id);
-        const auto route = resolver.resolveRoute(m_sourceFormatId, fmt.id);
+        const auto route = resolver.resolveRoute(
+            m_sourceFormatId, fmt.id,
+            preset && preset->targetFormatId == fmt.id ? m_selectedPresetOptions : QVariantMap{});
         item->setToolTip(route.reason);
         if (!route.available)
             item->setFlags(item->flags() & ~Qt::ItemIsEnabled & ~Qt::ItemIsSelectable);
@@ -346,22 +351,30 @@ void FormatSelectorDialog::populateFormats() {
 
     if (m_listWidget->count() > 0) {
         for (int row = 0; row < m_listWidget->count(); ++row) {
-            if (m_listWidget->item(row)->flags() & Qt::ItemIsEnabled) {
+            auto *item = m_listWidget->item(row);
+            if (preset && item->data(Qt::UserRole).toString() == preset->targetFormatId &&
+                !(item->flags() & Qt::ItemIsEnabled)) {
+                m_detailLabel->setText(item->toolTip());
+                return;
+            }
+            if ((item->flags() & Qt::ItemIsEnabled) &&
+                (!preset || item->data(Qt::UserRole).toString() == preset->targetFormatId)) {
                 m_listWidget->setCurrentRow(row);
                 break;
             }
         }
         onItemSelectionChanged();
     }
+    onFilterTextChanged(m_searchEdit->text());
 }
 
 void FormatSelectorDialog::onItemSelectionChanged() {
     auto *item = m_listWidget->currentItem();
+    m_ok->setEnabled(item && !item->isHidden() && (item->flags() & Qt::ItemIsEnabled));
     if (!item || item->data(Qt::UserRole).toString().isEmpty())
         return;
 
     const QString formatId = item->data(Qt::UserRole).toString();
-    updateDetailPanel(formatId);
 
     // If current format does not match the active preset's targetFormatId, clear stale preset options
     if (!m_selectedPresetId.isEmpty()) {
@@ -381,8 +394,14 @@ void FormatSelectorDialog::onItemSelectionChanged() {
                 m_editPresetBtn->setEnabled(false);
             if (m_deletePresetBtn)
                 m_deletePresetBtn->setEnabled(false);
+            for (int i = 0; i < m_listWidget->count(); ++i) {
+                auto *row = m_listWidget->item(i);
+                if (row->data(Qt::UserRole).toString() == m_sourceFormatId)
+                    delete m_listWidget->takeItem(i);
+            }
         }
     }
+    updateDetailPanel(formatId);
 }
 
 void FormatSelectorDialog::updateDetailPanel(const QString &formatId) {
@@ -396,21 +415,10 @@ void FormatSelectorDialog::updateDetailPanel(const QString &formatId) {
                        .arg(cap.definition.name)
                        .arg(cap.definition.defaultExtension);
 
-    text += QString("Responsible Engine: <b>%1</b><br>")
-                .arg(cap.activeEngineName.isEmpty() ? "Unknown" : cap.activeEngineName);
-    text +=
-        QString("Capability Status: %1<br>")
-            .arg(cap.readiness == core::FormatReadiness::Verified
-                     ? "<span style='color:#34d399;'>Available (registry test tier; not a host "
-                       "guarantee)</span>"
-                     : (cap.readiness == core::FormatReadiness::Available
-                            ? "<span style='color:#38bdf8;'>Available on Host</span>"
-                            : "<span style='color:#f87171;'>Recognized (Engine/Delegates missing)</span>"));
-
-    if (!cap.engineStatusDetail.isEmpty()) {
-        text += QString("Details: %1").arg(cap.engineStatusDetail);
-    }
-
+    const auto route = resolver.resolveRoute(m_sourceFormatId, formatId, m_selectedPresetOptions);
+    text += QString("Engine: %1<br>%2")
+                .arg(route.engine.toHtmlEscaped(),
+                     route.available ? QString("Available for this source") : route.reason.toHtmlEscaped());
     m_detailLabel->setText(text);
 }
 
@@ -425,10 +433,12 @@ void FormatSelectorDialog::onFilterTextChanged(const QString &text) {
         const bool match = filter.isEmpty() || fmtId.contains(filter) || textLabel.contains(filter);
         item->setHidden(!match);
     }
+    auto *current = m_listWidget->currentItem();
+    m_ok->setEnabled(current && !current->isHidden() && (current->flags() & Qt::ItemIsEnabled));
 }
 
 void FormatSelectorDialog::onItemDoubleClicked(QListWidgetItem *item) {
-    if (item && (item->flags() & Qt::ItemIsEnabled)) {
+    if (item && !item->isHidden() && m_ok->isEnabled() && (item->flags() & Qt::ItemIsEnabled)) {
         m_selectedFormatId = item->data(Qt::UserRole).toString();
         if (m_applyToAllCheck) {
             m_applyToAllRemaining = m_applyToAllCheck->isChecked();

@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-brightgreen.svg)](https://en.cppreference.com/w/cpp/20)
 [![Qt 6](https://img.shields.io/badge/Qt-6.4%2B-green.svg)](https://www.qt.io/)
-[![Version: 1.1.6](https://img.shields.io/badge/Release-v1.1.6-emerald.svg)](https://github.com/IAmThroot/Universal-Converter/releases/tag/v1.1.6)
+[![Version: 1.1.7](https://img.shields.io/badge/Release-v1.1.7-emerald.svg)](https://github.com/IAmThroot/Universal-Converter/releases/tag/v1.1.7)
 
 A high-performance, completely offline, native **C++20 / Qt 6** desktop application for converting audio, video, images, subtitles, and documents across formats without web runtimes, Electron, localhost daemons, or remote API dependencies.
 
@@ -21,10 +21,10 @@ A high-performance, completely offline, native **C++20 / Qt 6** desktop applicat
 - **Watch Folder Automation**: Background filesystem watcher with size-stable debouncing, custom output routing, and configurable post-processing triggers (*Move to Processed*, *Delete Original*, *Keep Original*).
 - **Subtitles & Text Stream Engine**: Conversion between `SRT`, `VTT`, `ASS`, and `SSA`, with `.sub` supported as input only with automatic multi-tier character encoding detection (BOM, strict UTF-8, `uchardet`, `CP1252`/Latin-1), preventing decoding errors across international subtitle sets.
 - **Video ↔ Animated Image Pipelines**: High-fidelity bidirectional conversion between video and animated images (`GIF`, `WebP`, `AVIF`) using dual-pass `palettegen`/`paletteuse` filters, looping controls, and audio stripping.
-- **Modern Vector & Image Pipelines**: First-class SVG vector rasterization via `rsvg-convert` with a zero-dependency `Qt6::Svg` fallback, plus detection and execution hooks for standalone image optimization toolchains (`oxipng`, `pngquant`, `cwebp`, `avifenc`).
+- **Modern Vector & Image Pipelines**: First-class SVG vector rasterization via `rsvg-convert` with a zero-dependency `Qt6::Svg` fallback, plus detection and execution hooks for standalone image optimization toolchains (`oxipng`, `pngquant`).
 - **Interactive Before & After Image Preview**: Dual-panel comparison using reduced-resolution ImageMagick samples, a debounced quality slider, zoom, and a transparency checkerboard. Preview failure does not block conversion.
 - **Dynamic Format Capability Resolver**: Route availability checks with blocking reasons based on installed tools, output containers, required encoders, and image/document capabilities. Actual input streams are inspected during conversion.
-- **Conversion History & Retry**: Privacy-preserving persistent local history logging timestamps, file sizes, conversion duration, and job status with one-click retry.
+- **Conversion History & Retry**: Privacy-preserving persistent local history logging timestamps, file sizes, conversion duration, and job status with one-click retry. Retrying uses the original output directory and reserves a fresh filename.
 - **Unified Engine Orchestration**:
   - **Video & Audio**: Multi-threaded encoding via FFmpeg, hardware acceleration where supported by the installed engine and available device (NVENC, VA-API, QSV), and accurate stream probing via FFprobe.
   - **Subtitles**: Direct text stream transcoding via FFmpeg with intelligent charset negotiation.
@@ -44,13 +44,19 @@ The registry describes known formats and permitted routes. The application check
 
 ### Registered formats (availability depends on installed tools)
 
-| Engine | Category | Listed Count | Formats |
-| :--- | :--- | :---: | :--- |
-| **FFmpeg** | Video & Animated | 23 | `mp4`, `mkv`, `webm`, `avi`, `mov`, `flv`, `wmv`, `m4v`, `3gp`, `ts`, `vob`, `ogv`, `mpeg`, `mpg`, `m2ts`, `asf`, `f4v`, `y4m`, `dv`, `wtv`, animated `gif`, `webp`, `avif` |
-| **FFmpeg** | Audio | 23 | `mp3`, `aac`, `ogg`, `opus`, `flac`, `wav`, `m4a`, `wma`, `aiff`, `alac`, `ac3`, `mka`, `amr`, `ape`, `ra`, `voc`, `au`, `caf`, `spx`, `mid`, `eac3`, `dts`, `wv` |
-| **FFmpeg** | Subtitles | 5 | `srt`, `vtt`, `ass`, `ssa`, `sub` (input only; with automatic character encoding detection) |
-| **ImageMagick & Vector** | Images & RAW | 50 | `png`, `jpg`, `jpeg`, `webp`, `gif`, `bmp`, `tiff`, `ico`, `svg`, `avif`, `tga`, `heic`, `dcm`, `cr2`, `nef`, `arw`, `dng`, `orf`, `rw2`, `pef`, `jxl`, `exr`, `pcx`, `pbm`, `pgm`, `ppm`, `pnm`, `xpm`, `xbm`, `wbmp`, `dds`, `dpx`, `cin`, `sgi`, `ras`, `qoi`, `mos`, `raw`, `3fr`, `erf`, `mrw`, `mef`, `srw`, `sr2`, `srf`, etc. |
-| **Pandoc + Typst** | Documents & PDF | 16 | `md`, `markdown`, `docx`, `odt`, `epub`, `tex`, `rst`, `adoc`, `org`, `textile`, `wiki`, `opml`, `rtf`, `txt`, `pdf`, `html` |
+Canonical file extensions are shown first. Parentheses list additional recognized input extensions.
+The GIF, WebP, and AVIF entries also support video conversion through FFmpeg.
+
+<!-- Regenerate this table with ./build/tst_core --format-table. -->
+<!-- formats:begin -->
+| Category | Input and output | Input only | Output only |
+| --- | --- | --- | --- |
+| Video | `mp4` (m4v), `webm`, `mkv`, `mov` (qt), `avi`, `flv`, `wmv` (asf), `ts` (mts, m2ts), `ogv` (ogx), `3gp` (3g2), `mpeg` (mpg, mpe, mpv), `vob`, `mxf`, `gxf`, `nut`, `amv`, `y4m`, `dv` (dif), `wtv` | `rm` (rmvb) | — |
+| Audio | `mp3`, `wav`, `flac`, `aac`, `ogg` (oga), `opus`, `m4a` (alac), `wma`, `aiff` (aif, aifc), `ac3`, `eac3`, `dts`, `mp2`, `au` (snd), `m4b`, `voc`, `wv`, `qoa` | `caf`, `mogg`, `mp1`, `mpc`, `dsd` (dsf, dff) | — |
+| Images | `png`, `jpeg` (jpg, jfif, jpe), `webp`, `gif`, `avif`, `bmp`, `tiff` (tif), `ico`, `svg`, `psd`, `tga`, `heic` (heif), `cur`, `hdr`, `jxl`, `exr`, `pcx`, `pbm`, `pgm`, `ppm`, `pnm`, `xpm`, `xbm`, `wbmp`, `dds`, `dpx`, `cin`, `sgi` (rgb, rgba), `ras` (sun), `qoi` | `mpo`, `cr2`, `crw`, `cr3`, `nef`, `arw`, `dng`, `rw2`, `raf`, `orf`, `pef`, `dcr`, `nrw`, `mos`, `raw`, `3fr`, `erf`, `mrw`, `mef`, `srw`, `sr2`, `srf`, `dcm` (dicom), `icns`, `xcf` | — |
+| Documents | `md` (markdown), `html` (htm), `docx`, `odt`, `epub`, `tex` (latex), `rst`, `adoc` (asciidoc), `org`, `textile`, `wiki` (mediawiki), `opml`, `txt` | `rtf` | `pdf` |
+| Subtitles | `srt`, `vtt` (webvtt), `ass`, `ssa` | `sub` | — |
+<!-- formats:end -->
 
 > [!TIP]
 > **Container vs. Codec Discovery**: An MP4 container requires supported video/audio codecs in your installed FFmpeg build; Camera RAW formats require ImageMagick delegate libraries (`libraw`, `librsvg`). Universal Converter dynamically probes your installed engine capabilities at launch and disables unavailable routes. Registry test tiers describe coverage, not guarantees for every host or file.
@@ -94,8 +100,8 @@ Download the latest pre-built binaries directly from the [GitHub Releases](https
     - **Fedora**: `sudo dnf install ffmpeg ImageMagick`
 
 - **Windows (x64)**:
-  - 💾 **Download `UniversalConverter-1.1.6-win64.exe`** (NSIS setup wizard with desktop shortcuts and uninstaller)
-  - 🗜️ **Download `UniversalConverter-1.1.6-win64.zip`** (Portable package: extract and run `UniversalConverter.exe`)
+  - 💾 **Download `UniversalConverter-1.1.7-win64.exe`** (NSIS setup wizard with desktop shortcuts and uninstaller)
+  - 🗜️ **Download `UniversalConverter-1.1.7-win64.zip`** (Portable package: extract and run `UniversalConverter.exe`)
   - **Prerequisites for Media/Image conversions**:
     - Install via Windows Package Manager (`winget` in Terminal / PowerShell):
       ```powershell
@@ -178,7 +184,7 @@ scripts\package-windows.bat
 3. **Review the batch**: Select rows and choose a format/preset. Review destinations and readiness. Resolve or remove blocked rows. Cancel starts no jobs; **Convert N Files** reserves unique output names and starts the batch.
 4. **Inspect progress**: The queue shows progress and elapsed time, with speed/ETA when the engine reports enough information. Right-click for Open Output, Open Folder, Retry, Cancel, or Details.
 5. **Inspect outcomes**: Summaries distinguish success, failure, cancellation, active work, and waiting jobs. History stores local diagnostics and retry options.
-6. **Automate**: Open **Watch Folders** to configure folders, destinations, presets, recursion, and post-actions. New folders keep originals by default. Pause clears pending candidates and cancels queued jobs; running jobs finish using their captured settings. Use Retry Failures after resolving a problem. Watching runs while the application is open.
+6. **Automate**: Open **Watch Folders** to configure folders, destinations, presets, recursion, and post-actions. New folders keep originals by default. Pause clears pending candidates and cancels queued jobs; running jobs finish using their captured settings. Use Retry Failures after resolving a problem. When upgrading from 1.1.6 or earlier to 1.1.7, existing watches record the files already present, including files in paused watches. New watches process existing eligible files. Later restarts skip unchanged originals. The queue retains the latest 200 finished automated jobs. Watching runs while the application is open.
 7. **Close safely**: During active conversion, choose Keep Open or Cancel Jobs and Exit. The application waits for workers to stop before destruction.
 
 The Discord preset uses a fixed video/audio bitrate; it does not guarantee an upload-size limit. Image previews are reduced-resolution engine samples; final size and appearance can vary with the full-resolution conversion and optimizer.

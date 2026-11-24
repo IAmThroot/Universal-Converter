@@ -42,6 +42,26 @@ bool isStrictUtf8(const QByteArray& data) {
 
 } // anonymous namespace
 
+FfmpegConversionOptions FfmpegConversionOptions::fromJob(const QString &target, const QVariantMap &values,
+                                                         bool hardwareEnabled) {
+    FfmpegConversionOptions options;
+    options.targetFormatId = target;
+    options.hwMode = hardwareEnabled ? HardwareEncoderMode::Auto : HardwareEncoderMode::Disabled;
+    options.customVideoCodec = values.value("customVideoCodec").toString();
+    options.customVideoBitrateKbps = values.value("customVideoBitrateKbps").toInt();
+    options.customAudioCodec = values.value("customAudioCodec").toString();
+    options.customAudioBitrateKbps = values.value("customAudioBitrateKbps").toInt();
+    options.customAudioSampleRate = values.value("customAudioSampleRate").toInt();
+    options.customAudioChannels = values.value("customAudioChannels").toInt();
+    options.customWidth = values.value("customWidth").toInt();
+    options.customHeight = values.value("customHeight").toInt();
+    options.customFps = values.value("customFps").toInt();
+    options.crf = values.value("crf", options.crf).toInt();
+    options.preset = static_cast<ConversionPreset>(values.value("preset", int(options.preset)).toInt());
+    options.stripMetadata = values.value("stripMetadata").toBool();
+    return options;
+}
+
 QString FfmpegArgBuilder::selectVideoEncoder(const QString& targetContainer,
                                              HardwareEncoderMode hwMode,
                                              const QStringList& availableHwEncoders,
@@ -389,9 +409,6 @@ ArgumentBuildResult FfmpegArgBuilder::buildArguments(const QString& inputPath,
         result.chosenAudioCodec = audioEncoder;
         args << "-c:a" << audioEncoder;
 
-        if (options.customAudioBitrateKbps > 0) {
-            args << "-b:a" << QString("%1k").arg(options.customAudioBitrateKbps);
-        }
         if (options.customAudioSampleRate > 0) {
             args << "-ar" << QString::number(options.customAudioSampleRate);
         }
@@ -496,12 +513,16 @@ ArgumentBuildResult FfmpegArgBuilder::buildArguments(const QString& inputPath,
             }
         } else if (probe.hasAudio()) {
             // Audio-to-Video bridging (Audio stream with black video)
-            result.chosenVideoCodec = "libx264";
-            result.chosenAudioCodec = selectAudioEncoder(targetContainer);
+            result.chosenVideoCodec =
+                options.customVideoCodec.isEmpty()
+                    ? selectVideoEncoder(targetContainer, HardwareEncoderMode::Disabled, {}, isHw)
+                    : options.customVideoCodec;
+            result.chosenAudioCodec = options.customAudioCodec.isEmpty() ? selectAudioEncoder(targetContainer)
+                                                                         : options.customAudioCodec;
 
             // Generate black video canvas matching audio length
             args << "-f" << "lavfi" << "-i" << "color=c=black:s=1280x720:r=25";
-            args << "-c:v" << "libx264" << "-pix_fmt" << "yuv420p" << "-shortest";
+            args << "-c:v" << result.chosenVideoCodec << "-pix_fmt" << "yuv420p" << "-shortest";
             args << "-c:a" << result.chosenAudioCodec;
         } else {
             result.errorMessage = "Input file contains neither video nor audio streams.";
@@ -513,6 +534,10 @@ ArgumentBuildResult FfmpegArgBuilder::buildArguments(const QString& inputPath,
             args << "-movflags" << "+faststart";
         }
     }
+
+    if (options.customAudioBitrateKbps > 0 && !result.chosenAudioCodec.isEmpty() &&
+        result.chosenAudioCodec != "copy")
+        args << "-b:a" << QString("%1k").arg(options.customAudioBitrateKbps);
 
     // Output path
     args << outputPath;

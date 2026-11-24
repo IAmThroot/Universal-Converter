@@ -65,11 +65,13 @@ void ConversionOrchestrator::setMaxConcurrency(int concurrency) {
     pumpQueue();
 }
 
-void ConversionOrchestrator::addJob(std::shared_ptr<ConversionJob> job) {
+void ConversionOrchestrator::addJob(std::shared_ptr<ConversionJob> job, bool automated) {
     if (!job || m_jobMap.contains(job->id())) {
         return;
     }
 
+    if (automated)
+        m_automatedJobs.insert(job->id());
     m_jobs.append(job);
     m_jobMap.insert(job->id(), job);
 
@@ -122,8 +124,8 @@ void ConversionOrchestrator::removeJob(const QString &jobId) {
     cancelJob(jobId);
     if (job && !job->isTerminal())
         return;
-    if (job)
-        OutputPathPlanner::releasePath(job->finalOutputPath());
+    m_automatedJobs.remove(jobId);
+    m_finishedAutomated.removeAll(jobId);
 
     if (m_jobMap.contains(jobId)) {
         m_jobMap.remove(jobId);
@@ -363,9 +365,14 @@ void ConversionOrchestrator::onJobFinishedInternal(const QString &jobId, JobStat
     ConversionHistoryManager::instance().recordJob(job.get(), durationMs);
 
     m_runningJobs.remove(jobId);
-    OutputPathPlanner::releasePath(job->finalOutputPath());
+    job->releaseReservedOutput();
 
     emit jobFinished(jobId, finalState);
+    if (m_automatedJobs.remove(jobId)) {
+        m_finishedAutomated.append(jobId);
+        if (m_finishedAutomated.size() > 200)
+            removeJob(m_finishedAutomated.takeFirst());
+    }
     QTimer::singleShot(0, this, &ConversionOrchestrator::pumpQueue);
 }
 

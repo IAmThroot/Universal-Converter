@@ -21,11 +21,14 @@ MagickArgumentResult ImageMagickArgBuilder::buildArguments(const QString& inputP
 
     const QString targetExt = QFileInfo(outputPath).suffix().toLower();
     QStringList args;
+    const bool sequence = options.preserveAnimation &&
+                          QStringList{"gif", "webp", "apng", "avif", "tiff", "pdf"}.contains(targetExt);
+    const QString source = sequence ? inputPath : inputPath + "[0]";
 
     // Multi-resolution Windows ICO generation
     if (targetExt == "ico" && options.generateMultiResolutionIcon) {
         // e.g. magick input.png -background transparent \( -clone 0 -resize 16x16 \) \( -clone 0 -resize 32x32 \) ... -delete 0 output.ico
-        args << inputPath;
+        args << source;
         args << "-background" << "transparent";
 
         for (int size : options.iconSizes) {
@@ -41,7 +44,7 @@ MagickArgumentResult ImageMagickArgBuilder::buildArguments(const QString& inputP
 
     // Standard raster / animated conversion
     // 1. Input path
-    args << inputPath;
+    args << source;
 
     // 2. Auto-orientation based on EXIF tag
     if (options.autoOrient) {

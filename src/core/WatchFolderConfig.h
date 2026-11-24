@@ -41,7 +41,7 @@ struct WatchFolderConfig {
         cfg.folderPath = obj["folderPath"].toString();
         cfg.targetFormatId = obj["targetFormatId"].toString();
         cfg.presetId = obj["presetId"].toString();
-        cfg.postAction = static_cast<WatchPostAction>(obj["postAction"].toInt(1));
+        cfg.postAction = static_cast<WatchPostAction>(obj["postAction"].toInt(0));
         cfg.destinationFolder = obj["destinationFolder"].toString();
         cfg.isRecursive = obj["isRecursive"].toBool(false);
         cfg.isEnabled = obj["isEnabled"].toBool(true);

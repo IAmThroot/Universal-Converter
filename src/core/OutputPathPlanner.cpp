@@ -171,13 +171,11 @@ PathPlanResult OutputPathPlanner::planOutputPath(const QString &inputFilePath, c
 bool OutputPathPlanner::publishTempToFinal(const QString &tempPath, const QString &finalPath,
                                            QString *errorMessage, CollisionPolicy policy) {
     if (tempPath.isEmpty() || finalPath.isEmpty()) {
-        releasePath(finalPath);
         if (errorMessage)
             *errorMessage = "Temporary or final output path is empty.";
         return false;
     }
     if (!QFile::exists(tempPath)) {
-        releasePath(finalPath);
         if (errorMessage)
             *errorMessage = QString("Temporary file missing: %1").arg(tempPath);
         return false;
@@ -191,7 +189,6 @@ bool OutputPathPlanner::publishTempToFinal(const QString &tempPath, const QStrin
                 *errorMessage = "Output appeared or could not be published; existing file preserved.";
             QFile::remove(tempPath);
         }
-        releasePath(finalPath);
         return ok;
     }
     // Explicit overwrite only: move existing destination aside first.
@@ -201,7 +198,6 @@ bool OutputPathPlanner::publishTempToFinal(const QString &tempPath, const QStrin
     if (QFile::exists(finalPath)) {
         hadExisting = true;
         if (!QFile::rename(finalPath, backupPath)) {
-            releasePath(finalPath);
             if (errorMessage) {
                 *errorMessage =
                     QString("Failed to back up existing file prior to publish: %1").arg(finalPath);
@@ -214,7 +210,6 @@ bool OutputPathPlanner::publishTempToFinal(const QString &tempPath, const QStrin
         if (hadExisting && QFile::exists(backupPath)) {
             QFile::remove(backupPath);
         }
-        releasePath(finalPath);
         return true;
     }
 
@@ -223,7 +218,6 @@ bool OutputPathPlanner::publishTempToFinal(const QString &tempPath, const QStrin
         QFile::rename(backupPath, finalPath);
     }
     QFile::remove(tempPath);
-    releasePath(finalPath);
     if (errorMessage) {
         *errorMessage = QString("Failed to move temporary file to final path: %1").arg(finalPath);
     }

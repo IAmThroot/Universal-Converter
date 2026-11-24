@@ -18,7 +18,7 @@ JobCreation JobFactory::create(const QString &input, const QString &output, cons
         if (options.contains(key) && options.value(key).toInt() < 0)
             return {{}, QString("Invalid negative value: %1").arg(key)};
     if (options.contains("preset") &&
-        (options.value("preset").toInt() < 0 || options.value("preset").toInt() > 6))
+        (options.value("preset").toInt() < 0 || options.value("preset").toInt() > 5))
         return {{}, "Invalid encoder speed preset"};
     const auto plan = OutputPathPlanner::planOutputPath(input, output, mode, destination);
     if (!plan.isValid)
@@ -30,7 +30,15 @@ JobCreation JobFactory::create(const QString &input, const QString &output, cons
         std::make_shared<ConversionJob>(QUuid::createUuid().toString(QUuid::WithoutBraces),
                                         QStringList{input}, format->id, output, plan.targetDirectory, engine);
     job->setOptions(options);
-    job->setFinalOutputPath(plan.finalFilePath);
+    job->adoptReservedOutput(plan.finalFilePath);
     return {job, {}};
+}
+JobCreation JobFactory::retry(const QString &input, const QString &output, const QVariantMap &options,
+                              const QString &previousOutput) {
+    if (!previousOutput.isEmpty())
+        return create(input, output, options, app::DestinationMode::CustomFolder,
+                      QFileInfo(previousOutput).absolutePath());
+    const auto &settings = app::AppSettings::instance();
+    return create(input, output, options, settings.destinationMode(), settings.customDestinationPath());
 }
 } // namespace uc::core
