@@ -129,23 +129,24 @@ jobs:
           cp typst-x86_64-pc-windows-msvc/NOTICE engines/typst/NOTICE 2>/dev/null || true
           rm -rf typst-win.zip typst-x86_64-pc-windows-msvc
 
-      - name: Ensure media tools are available for integration tests
-        shell: pwsh
+      - name: Install Windows media tools for integration tests
+        shell: bash
         run: |
-          if (!(Get-Command ffmpeg -ErrorAction SilentlyContinue) -or !(Get-Command ffprobe -ErrorAction SilentlyContinue)) {
-            choco install ffmpeg -y --no-progress
-            if ($LASTEXITCODE -ne 0) { throw "FFmpeg installation failed" }
-          }
-          if (!(Get-Command magick -ErrorAction SilentlyContinue)) {
-            choco install imagemagick -y --no-progress
-            if ($LASTEXITCODE -ne 0) { throw "ImageMagick installation failed" }
-          }
-          $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
-          $env:Path = "$env:Path;$machinePath"
-          foreach ($tool in "ffmpeg", "ffprobe", "magick") {
-            $exe = Get-Command $tool -CommandType Application -ErrorAction Stop | Select-Object -First 1
-            Split-Path $exe.Source | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          }
+          tools_dir="$(mktemp -d "$(cygpath -u "$RUNNER_TEMP")/media-tools.XXXXXX")"
+          cd "$tools_dir"
+          curl -fsSL --retry 3 https://github.com/GyanD/codexffmpeg/releases/download/8.0/ffmpeg-8.0-full_build.7z -o ffmpeg.7z
+          curl -fsSL --retry 3 https://github.com/ImageMagick/ImageMagick/releases/download/7.1.2-36/ImageMagick-7.1.2-36-portable-Q16-HDRI-x64.7z -o magick.7z
+          sha256sum -c <<'CHECKSUMS'
+          973db2088fc8dacc927443a95e1ddbfc686170a7e748d0ac810ae5ab81587b30  ffmpeg.7z
+          e7c705840e2d989eb9fdbd5c2ac87c5b7a9f95b97daee1a1e6e66aa152548ae5  magick.7z
+          CHECKSUMS
+          7z x -y ffmpeg.7z > /dev/null
+          7z x -y -omagick magick.7z > /dev/null
+          ffmpeg_bin="$tools_dir/ffmpeg-8.0-full_build/bin"
+          "$ffmpeg_bin/ffmpeg.exe" -version
+          "$ffmpeg_bin/ffprobe.exe" -version
+          "$tools_dir/magick/magick.exe" -version
+          cygpath -aw "$ffmpeg_bin" "$tools_dir/magick" >> "$GITHUB_PATH"
 
       - name: Configure CMake
         shell: bash
