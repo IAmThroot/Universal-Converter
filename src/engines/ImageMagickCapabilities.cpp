@@ -44,37 +44,25 @@ void ImageMagickCapabilities::discover(const QString& magickExecutablePath) {
         const QString fOut = QString::fromUtf8(fRes.standardOutput);
         const auto lines = fOut.split('\n');
 
+        // Static builds omit the Module column. Match the mode itself in either layout.
+        static const QRegularExpression formatRow(
+            QStringLiteral(R"(^\s*(\S+?)\*?\s+(?:\S+\s+)?([r-][w-][+-])(?:\s|$))"));
         for (const auto& line : lines) {
-            if (line.startsWith("---") || line.contains("Format  Module") || line.trimmed().isEmpty()) {
-                continue;
-            }
+            const auto match = formatRow.match(line);
+            if (!match.hasMatch()) continue;
 
-            // Columns typically: Format (col 0-10), Module (10-20), Mode (20-26), Description
-            const QString trimmed = line.trimmed();
-            const auto tokens = trimmed.split(QRegularExpression("\\s+"));
-            if (tokens.size() < 3) continue;
+            const QString fmtTag = match.captured(1).toUpper();
+            const QString flags = match.captured(2);
+            ImageFormatMode mode;
+            mode.format = fmtTag;
+            mode.canRead = flags.at(0) == 'r';
+            mode.canWrite = flags.at(1) == 'w';
+            mode.supportsMultiFrame = flags.at(2) == '+';
 
-            QString fmtTag = tokens.value(0).remove('*').trimmed().toUpper();
-            QString modeStr = tokens.value(2).trimmed();
-
-            // Mode usually has 3 characters: e.g. "rw+", "r--", "rw-"
-            if (modeStr.size() < 2 && tokens.size() >= 4) {
-                // Shift if format description or module had odd spacing
-                modeStr = tokens.value(1).trimmed();
-            }
-
-            if (modeStr.contains('r') || modeStr.contains('w')) {
-                ImageFormatMode mode;
-                mode.format = fmtTag;
-                mode.canRead = modeStr.contains('r');
-                mode.canWrite = modeStr.contains('w');
-                mode.supportsMultiFrame = modeStr.contains('+');
-
-                m_formats[fmtTag] = mode;
-                if (mode.canRead) m_readableFormats.insert(fmtTag);
-                if (mode.canWrite) m_writableFormats.insert(fmtTag);
-                if (mode.supportsMultiFrame) m_multiFrameFormats.insert(fmtTag);
-            }
+            m_formats[fmtTag] = mode;
+            if (mode.canRead) m_readableFormats.insert(fmtTag);
+            if (mode.canWrite) m_writableFormats.insert(fmtTag);
+            if (mode.supportsMultiFrame) m_multiFrameFormats.insert(fmtTag);
         }
     }
 
