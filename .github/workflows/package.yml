@@ -17,9 +17,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build qt6-base-dev libqt6svg6-dev qt6-qpa-plugins qt6-wayland libxcb-cursor0 ffmpeg imagemagick librsvg2-bin uchardet curl tar xz-utils
+        run: bash .github/scripts/install-linux-dependencies.sh qt6-wayland libxcb-cursor0
 
       - name: Download standalone bundled engines (Linux x86_64)
         run: |
